@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>职场透镜 - 后端API测试器</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f0f2f5; color: #333; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+        .container { width: 100%; max-width: 800px; background-color: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
+        h1 { text-align: center; color: #6a5acd; margin-bottom: 25px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: 600; margin-bottom: 8px; }
+        textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; box-sizing: border-box; min-height: 150px; resize: vertical; }
+        button { width: 100%; padding: 15px; background-color: #6a5acd; color: white; border: none; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; transition: background-color 0.2s; }
+        button:disabled { background-color: #b1a2e6; cursor: not-allowed; }
+        #result-container { margin-top: 30px; padding: 20px; background-color: #f7f7f7; border: 1px solid #e0e0e0; border-radius: 8px; white-space: pre-wrap; font-family: 'Courier New', Courier, monospace; min-height: 100px; }
+        .spinner { border: 4px solid rgba(0,0,0,0.1); width: 24px; height: 24px; border-radius: 50%; border-left-color: #fff; animation: spin 1s ease infinite; display: inline-block; vertical-align: middle; margin-left: 10px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>职场透镜 - 后端API测试器 🔬</h1>
+        
+        <div class="form-group">
+            <label for="company-text">输入公司简介, JD, 或网络评价...</label>
+            <textarea id="company-text" placeholder="例如：我们是一家快速发展的创业公司，寻找充满激情的伙伴加入。我们提供有竞争力的薪酬和无限的零食。需要适应996工作节奏。"></textarea>
+        </div>
+        
+        <button id="analyze-button">开始分析</button>
+
+        <div id="result-container">（AI的分析报告将显示在这里）</div>
+    </div>
+
+    <script>
+        const analyzeButton = document.getElementById('analyze-button');
+        const resultContainer = document.getElementById('result-container');
+        const companyTextInput = document.getElementById('company-text');
+
+        // 【重要！】URL已更新为你自己的Cloud Run服务地址！
+        const API_URL = 'https://project-lens-backend-885033581194.us-central1.run.app/analyze'; 
+
+        analyzeButton.addEventListener('click', async function() {
+            const originalButtonText = analyzeButton.innerHTML;
+            analyzeButton.innerHTML = '分析中...<div class="spinner"></div>';
+            analyzeButton.disabled = true;
+            resultContainer.textContent = '正在连接云端AI大脑，请稍候...';
+
+            const data = {
+                text: companyTextInput.value
+            };
+
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data),
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    resultContainer.textContent = result.analysis;
+                } else {
+                    resultContainer.textContent = `发生错误: ${result.error}`;
+                }
+
+            } catch (error) {
+                resultContainer.textContent = '发生连接错误，请检查浏览器控制台(F12)的报错信息，或者确认API URL是否正确。\n' + error.message;
+            } finally {
+                analyzeButton.innerHTML = originalButtonText;
+                analyzeButton.disabled = false;
+            }
+        });
+    </script>
+
+</body>
+</html>
