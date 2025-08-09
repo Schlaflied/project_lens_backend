@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 3.0 - Flask移植成功版 (Flask Transplant Success)
-# 描述: 参照「灵感方舟」的成功经验，将应用核心从FastAPI切换为Flask，
-#       以解决在Cloud Run上的部署问题。
+# 版本: 4.0 - 多语言输出版 (Multi-Language Output)
+# 描述: 接收前端的语言指令，并命令AI用对应的语言生成报告。
 # -----------------------------------------------------------------------------
 
 import os
@@ -15,7 +14,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app) # 启用CORS，允许前端访问
 
-# --- 2. 配置Google Gemini API (参照Plot Ark的成功配置) ---
+# --- 2. 配置Google Gemini API ---
 try:
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -26,23 +25,15 @@ except Exception as e:
     print(f"Gemini API 配置失败: {e}")
 
 # --- 3. 设计核心AI指令 (Prompt) ---
+# 【关键改动】增加了一个 {output_language} 的占位符
 PROMPT_TEMPLATE = """
-As 'Project Lens', an expert AI assistant for job seekers, your task is to analyze the provided text about a company.
+As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report based on the provided text about a company.
+**Crucially, you must generate the entire response strictly in {output_language}.**
 
-First, perform a detailed **Culture-Fit Analysis**. Focus on:
-- **Work-Life Balance:** Is there evidence of long hours, high pressure, or a relaxed environment?
-- **Team Collaboration Style:** Does it seem collaborative, competitive, or individualistic?
-- **Growth Opportunities:** What are the potential learning and career development prospects?
-
-Second, and most importantly, act as a sharp **Corporate Investigator** to identify any potential 'red flags' that might suggest this is a shell company or a scam. Based ONLY on the provided text, look for:
-- Vague or overly glamorous job descriptions.
-- Unusually high pay for low skill requirements.
-- Any mention of upfront fees, training costs, or security deposits.
-- Inconsistencies in company descriptions or business models.
-
-Finally, conclude with a clear, actionable summary:
-- **[CULTURE SUMMARY]:** A brief overview of the company culture.
-- **[RISK ASSESSMENT]:** Rate the risk as **Low, Medium, or High**. Explain your reasoning based on the red flags found.
+The report should include:
+1.  **Culture-Fit Analysis**: Focus on Work-Life Balance, Team Collaboration Style, and Growth Opportunities.
+2.  **Corporate Investigator Report**: Identify potential 'red flags' that might suggest a shell company or a scam. Look for vague job descriptions, mismatched pay, or requests for fees.
+3.  **Risk Assessment**: Conclude with a clear risk rating (Low, Medium, or High) and explain your reasoning.
 
 Please structure your entire response in Markdown format for clear presentation.
 
@@ -60,7 +51,7 @@ def index():
 
 @app.route('/analyze', methods=['POST'])
 def analyze_company_text():
-    """核心功能端点，接收文本并返回AI分析。"""
+    """核心功能端点，接收文本和语言指令，并返回AI分析。"""
     print("--- Analysis request received! ---")
     try:
         data = request.get_json()
@@ -68,12 +59,21 @@ def analyze_company_text():
             return jsonify({"error": "Invalid request. 'text' field is required."}), 400
 
         user_text = data['text']
-        print("Data validated. Building prompt for Gemini API...")
+        # 【关键改动】获取前端传来的语言码，如果没有则默认为英文
+        lang_code = data.get('language', 'en')
+        print(f"Data validated. Language requested: {lang_code}")
 
-        # 使用我们为职场透镜设计的Prompt
-        full_prompt = PROMPT_TEMPLATE.format(user_text=user_text)
+        # 创建一个字典，将语言码映射为给AI的明确指令
+        language_instructions = {
+            'en': 'English',
+            'zh-CN': 'Simplified Chinese (简体中文)',
+            'zh-TW': 'Traditional Chinese (繁體中文)'
+        }
+        output_language = language_instructions.get(lang_code, 'English')
 
-        # 【关键】使用Plot Ark中验证成功的模型和安全设置
+        # 将用户文本和语言指令都填入Prompt模板
+        full_prompt = PROMPT_TEMPLATE.format(user_text=user_text, output_language=output_language)
+
         model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
         safety_settings = [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -82,9 +82,9 @@ def analyze_company_text():
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ]
 
+        print(f"Sending request to Gemini, asking for output in {output_language}...")
         response = model.generate_content(full_prompt, safety_settings=safety_settings)
         
-        # 检查响应是否被拦截
         if not response.parts:
             block_reason = response.prompt_feedback.block_reason.name if response.prompt_feedback else "Unknown"
             print(f"Response blocked by API. Reason: {block_reason}")
