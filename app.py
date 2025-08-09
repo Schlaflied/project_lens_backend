@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 1.6 - 职位精准分析版 (Job Title Specific)
-# 描述: 增加了对可选参数 "jobTitle" 的处理，使搜索和分析更具针对性。
+# 版本: 1.7 - 最终安全加固版 (Final Security Hardened)
+# 描述: 注入了详细的“皮包公司”侦测指令，确保AI能精准识别高风险诈骗。
 # -----------------------------------------------------------------------------
 
 import os
@@ -43,7 +43,7 @@ def perform_google_search(query, api_key, cse_id):
         return [], []
 
 # --- 4. 核心AI指令 (Prompt) ---
-# 【重要更新】增加了 {job_title_context} 占位符
+# 【重要更新】注入了详细的“皮包公司”侦测指令
 PROMPT_TEMPLATE = """
 As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report based on the provided information.
 **Crucially, you must generate the entire response strictly in {output_language}.**
@@ -60,25 +60,34 @@ As 'Project Lens', an expert AI assistant for job seekers, your task is to gener
     ```
 
 **Your Task:**
-Synthesize all the information above to create a comprehensive report.
+Synthesize all the information above to create a comprehensive report. The report MUST include the following sections:
 
-The report should include:
-1.  **Culture-Fit Analysis**: Based on the search results, analyze the company's Work-Life Balance, Team Collaboration Style, and Growth Opportunities, **specifically considering the provided Job Title if available.**
-2.  **Corporate Investigator Report**: Identify potential 'red flags' or risks.
-3.  **Personalized Match Analysis (if resume is provided)**: Analyze how well the applicant's background and skills match the company culture and the specific role. Provide actionable advice. If no resume is provided, state that this section is unavailable.
-4.  **Risk Assessment**: Conclude with a clear risk rating (Low, Medium, or High).
+**1. Culture-Fit Analysis:**
+Based on the search results, analyze the company's Work-Life Balance, Team Collaboration Style, and Growth Opportunities, specifically considering the provided Job Title if available.
 
-Please structure your entire response in Markdown format.
+**2. Corporate Investigator Report (Highest Priority):**
+Act as a sharp corporate investigator. Based ONLY on the provided search snippets, identify any potential 'red flags' that might suggest this is a shell company or a scam. You MUST check for the following signals:
+* **Vague or Glamorous Descriptions:** Does the information promise unusually high rewards for low skill requirements? Is the job description unclear?
+* **Requests for Fees:** Is there any mention of upfront fees, training costs, security deposits, or any payment required from the applicant?
+* **Inconsistent Information:** Are there contradictions in company size, location, or business scope across different snippets?
+* **Poor Digital Footprint:** Do the search results suggest a very new website, low social media activity, or a general lack of a professional online presence?
+
+**3. Personalized Match Analysis (if resume is provided):**
+Analyze how well the applicant's background and skills match the company culture and the specific role. Provide actionable advice. If no resume is provided, state that this section is unavailable.
+
+**4. Final Risk Assessment:**
+Conclude with a clear risk rating: **Low, Medium, or High**.
+* If you find **even one** of the red flags from the "Corporate Investigator Report" (especially any mention of fees), you **MUST** rate the risk as **High** and strongly advise the user to proceed with extreme caution.
+* Otherwise, provide a rating based on the overall findings.
 """
 
 # --- 5. API路由 ---
 @app.route('/analyze', methods=['POST'])
 def analyze_company_text():
-    print("--- V1.6 Analysis request received! ---")
+    print("--- V1.7 Analysis request received! ---")
     try:
         data = request.get_json()
         company_name = data.get('companyName')
-        # 【重要更新】接收职位名称
         job_title = data.get('jobTitle', '') 
         resume_text = data.get('resumeText', 'No resume provided.')
         lang_code = data.get('language', 'en')
@@ -86,17 +95,17 @@ def analyze_company_text():
         if not company_name:
             return jsonify({"error": "Company name is required."}), 400
 
-        # --- a. 执行Google搜索 ---
-        # 【重要更新】如果提供了职位名称，搜索查询会更具体
         print(f"Searching for: {company_name} - {job_title if job_title else 'General'}")
         base_query = f'"{company_name}"'
         if job_title:
             base_query += f' "{job_title}"'
-            
+        
+        # 增加一个专门搜索负面词汇的查询
         search_queries = [
             f'{base_query} company culture review',
             f'{base_query} work life balance',
-            f'site:glassdoor.com {base_query} reviews'
+            f'site:glassdoor.com {base_query} reviews',
+            f'{base_query} scam OR fraud OR fake'
         ]
         all_snippets = []
         all_sources = []
@@ -108,11 +117,8 @@ def analyze_company_text():
         search_context = "\n".join(all_snippets) if all_snippets else "No information found in web search."
         print(f"Found {len(all_snippets)} snippets.")
 
-        # --- b. 构建并调用Gemini ---
         language_instructions = {'en': 'English', 'zh-CN': 'Simplified Chinese (简体中文)', 'zh-TW': 'Traditional Chinese (繁體中文)'}
         output_language = language_instructions.get(lang_code, 'English')
-
-        # 【重要更新】准备职位名称的上下文
         job_title_context = f"for the role of '{job_title}'" if job_title else ""
 
         full_prompt = PROMPT_TEMPLATE.format(
@@ -133,9 +139,10 @@ def analyze_company_text():
         print(f"!!! An unexpected error occurred: {e} !!!")
         return jsonify({"error": "An internal server error occurred."}), 500
 
-# --- 本地测试启动点 ---
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
+
+
 
 
