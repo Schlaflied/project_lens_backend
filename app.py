@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 1.5 - 功能深化版 (Feature Enhancement)
-# 描述: 集成了Google Search API实现自动信息聚合，并支持个人化简历分析。
+# 版本: 1.6 - 职位精准分析版 (Job Title Specific)
+# 描述: 增加了对可选参数 "jobTitle" 的处理，使搜索和分析更具针对性。
 # -----------------------------------------------------------------------------
 
 import os
@@ -20,10 +20,8 @@ try:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     SEARCH_API_KEY = os.getenv("SEARCH_API_KEY")
     SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
-
     if not all([GEMINI_API_KEY, SEARCH_API_KEY, SEARCH_ENGINE_ID]):
         raise ValueError("One or more API keys are missing from environment variables.")
-    
     genai.configure(api_key=GEMINI_API_KEY)
     print("所有API密钥配置成功！")
 except Exception as e:
@@ -31,38 +29,32 @@ except Exception as e:
 
 # --- 3. 辅助函数：执行Google搜索 ---
 def perform_google_search(query, api_key, cse_id):
-    """调用Google Custom Search API并返回结果摘要和链接。"""
     url = "https://www.googleapis.com/customsearch/v1"
-    params = {
-        'key': api_key,
-        'cx': cse_id,
-        'q': query,
-        'num': 5 # 获取前5个结果
-    }
+    params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': 4}
     try:
         response = requests.get(url, params=params)
-        response.raise_for_status() # 如果请求失败则抛出异常
+        response.raise_for_status()
         search_results = response.json()
-        
         snippets = [item.get('snippet', '') for item in search_results.get('items', [])]
         sources = [{'title': item.get('title'), 'link': item.get('link')} for item in search_results.get('items', [])]
-        
         return snippets, sources
     except requests.exceptions.RequestException as e:
         print(f"Google搜索请求失败: {e}")
         return [], []
 
 # --- 4. 核心AI指令 (Prompt) ---
+# 【重要更新】增加了 {job_title_context} 占位符
 PROMPT_TEMPLATE = """
 As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report based on the provided information.
 **Crucially, you must generate the entire response strictly in {output_language}.**
 
 **Information Provided:**
-1.  **Search Snippets:** The following are recent search results about the company.
+1.  **Company & Role:** {company_name} {job_title_context}
+2.  **Search Snippets:** The following are recent search results about the company and role.
     ```
     {search_context}
     ```
-2.  **Applicant's Resume/Bio (if provided):**
+3.  **Applicant's Resume/Bio (if provided):**
     ```
     {resume_text}
     ```
@@ -71,9 +63,9 @@ As 'Project Lens', an expert AI assistant for job seekers, your task is to gener
 Synthesize all the information above to create a comprehensive report.
 
 The report should include:
-1.  **Culture-Fit Analysis**: Based on the search results, analyze the company's Work-Life Balance, Team Collaboration Style, and Growth Opportunities.
+1.  **Culture-Fit Analysis**: Based on the search results, analyze the company's Work-Life Balance, Team Collaboration Style, and Growth Opportunities, **specifically considering the provided Job Title if available.**
 2.  **Corporate Investigator Report**: Identify potential 'red flags' or risks.
-3.  **Personalized Match Analysis (if resume is provided)**: Analyze how well the applicant's background and skills match the company culture. Provide actionable advice. If no resume is provided, state that this section is unavailable.
+3.  **Personalized Match Analysis (if resume is provided)**: Analyze how well the applicant's background and skills match the company culture and the specific role. Provide actionable advice. If no resume is provided, state that this section is unavailable.
 4.  **Risk Assessment**: Conclude with a clear risk rating (Low, Medium, or High).
 
 Please structure your entire response in Markdown format.
@@ -82,10 +74,12 @@ Please structure your entire response in Markdown format.
 # --- 5. API路由 ---
 @app.route('/analyze', methods=['POST'])
 def analyze_company_text():
-    print("--- V1.5 Analysis request received! ---")
+    print("--- V1.6 Analysis request received! ---")
     try:
         data = request.get_json()
         company_name = data.get('companyName')
+        # 【重要更新】接收职位名称
+        job_title = data.get('jobTitle', '') 
         resume_text = data.get('resumeText', 'No resume provided.')
         lang_code = data.get('language', 'en')
 
@@ -93,11 +87,16 @@ def analyze_company_text():
             return jsonify({"error": "Company name is required."}), 400
 
         # --- a. 执行Google搜索 ---
-        print(f"Searching for: {company_name}")
+        # 【重要更新】如果提供了职位名称，搜索查询会更具体
+        print(f"Searching for: {company_name} - {job_title if job_title else 'General'}")
+        base_query = f'"{company_name}"'
+        if job_title:
+            base_query += f' "{job_title}"'
+            
         search_queries = [
-            f'"{company_name}" company culture review',
-            f'"{company_name}" work life balance',
-            f'site:glassdoor.com "{company_name}" reviews'
+            f'{base_query} company culture review',
+            f'{base_query} work life balance',
+            f'site:glassdoor.com {base_query} reviews'
         ]
         all_snippets = []
         all_sources = []
@@ -113,8 +112,13 @@ def analyze_company_text():
         language_instructions = {'en': 'English', 'zh-CN': 'Simplified Chinese (简体中文)', 'zh-TW': 'Traditional Chinese (繁體中文)'}
         output_language = language_instructions.get(lang_code, 'English')
 
+        # 【重要更新】准备职位名称的上下文
+        job_title_context = f"for the role of '{job_title}'" if job_title else ""
+
         full_prompt = PROMPT_TEMPLATE.format(
             output_language=output_language,
+            company_name=company_name,
+            job_title_context=job_title_context,
             search_context=search_context,
             resume_text=resume_text
         )
@@ -133,7 +137,5 @@ def analyze_company_text():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
-
-
 
 
