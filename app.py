@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 4.1 - 最终驯龙版 (Final Prompt-Tuning Version)
-# 描述: 增加了更严格的引用格式指令，并优化了汇总模块的提示。
+# 版本: 4.2 - 终极校对版 (Final Auto-Correction Version)
+# 描述: 增加了后端自动校正逻辑，强制修正AI不规范的引用格式。
 # -----------------------------------------------------------------------------
 
 import os
@@ -79,7 +79,7 @@ As 'Project Lens', an expert AI assistant for job seekers, your task is to gener
 **Citation Rules (VERY IMPORTANT):**
 1.  The information provided below is structured with a unique `[Source ID: X]`.
 2.  When you use information from a source, you **MUST** append its corresponding ID tag at the end of the sentence.
-3.  **DO NOT group citations.** Each citation must be in its own brackets. Incorrect: `[1, 2]`. Correct: `[1][2]`.
+3.  **DO NOT GROUP CITATIONS.** Each citation must be in its own brackets. For example, to cite sources 1, 2, and 3, you MUST write it as `[Source ID: 1][Source ID: 2][Source ID: 3]`. **NEVER write `[Source ID: 1, 2, 3]` or `[1, 2, 3]`**. This is a strict formatting rule.
 4.  At the end of your entire report, you **MUST** include a section titled `---REFERENCES---`.
 5.  Under this title, list **ONLY** the sources you actually cited. Format it as: `[Source ID: X] Title of the source`.
 
@@ -117,10 +117,10 @@ Conclude with a risk rating: **Low, Medium, or High**. Justify your rating with 
 # --- End of Prompt Change ---
 
 
-# --- 6. API路由 (无变化, 逻辑已能支持新Prompt) ---
+# --- 6. API路由 (已更新) ---
 @app.route('/analyze', methods=['POST'])
 def analyze_company_text():
-    print("--- V4.1 Final Prompt-Tuning Analysis request received! ---")
+    print("--- V4.2 Auto-Correction Analysis request received! ---")
     try:
         data = request.get_json()
         company_name = data.get('companyName')
@@ -198,13 +198,30 @@ def analyze_company_text():
         response = model.generate_content(full_prompt)
         ai_response_text = response.text
         
-        print("Received response from Gemini. Parsing citations...")
-        analysis_part = ai_response_text
+        print("Received response from Gemini. Applying auto-correction...")
+
+        # --- 【核心校对官】在这里修正AI不规范的引用 ---
+        def expand_grouped_citations(match):
+            # Takes a match object for a pattern like "[1, 2, 3]"
+            # Extracts the inner string "1, 2, 3"
+            id_string = match.group(1)
+            # Splits into individual numbers, strips whitespace
+            ids = [i.strip() for i in id_string.split(',')]
+            # Joins them back as "[1][2][3]"
+            return "".join([f"[{i}]" for i in ids])
+
+        # This regex finds any bracketed list with at least one comma
+        # e.g., [1,2], [1, 2, 3], but not [1]
+        corrected_text = re.sub(r'\[(\d+,\s*[\d,\s]*)\]', expand_grouped_citations, ai_response_text)
+        # --- 校对结束 ---
+
+        print("Parsing citations...")
+        analysis_part = corrected_text
         references_part = ""
         final_sources = []
 
-        if "---REFERENCES---" in ai_response_text:
-            parts = ai_response_text.split("---REFERENCES---")
+        if "---REFERENCES---" in corrected_text:
+            parts = corrected_text.split("---REFERENCES---")
             analysis_part = parts[0].strip()
             references_part = parts[1].strip()
             cited_ids = re.findall(r'\[Source ID: (\d+)\]', references_part)
@@ -214,6 +231,8 @@ def analyze_company_text():
                     source_detail = source_map[sid]
                     source_detail['id'] = sid
                     final_sources.append(source_detail)
+            
+            # This final replacement makes the citations in the text clickable
             analysis_part = re.sub(r'\[Source ID: (\d+)\]', r'[\1]', analysis_part)
 
         print(f"Successfully parsed {len(final_sources)} cited sources.")
@@ -226,6 +245,7 @@ def analyze_company_text():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
