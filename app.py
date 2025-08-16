@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 4.0 - 最终汇总版 (Final Summary Version)
-# 描述: 增加了一个专门的板块，用于汇总来自各大求职网站的评价。
+# 版本: 4.1 - 最终驯龙版 (Final Prompt-Tuning Version)
+# 描述: 增加了更严格的引用格式指令，并优化了汇总模块的提示。
 # -----------------------------------------------------------------------------
 
 import os
@@ -78,10 +78,10 @@ As 'Project Lens', an expert AI assistant for job seekers, your task is to gener
 
 **Citation Rules (VERY IMPORTANT):**
 1.  The information provided below is structured with a unique `[Source ID: X]`.
-2.  When you use information from a source to form your analysis, you **MUST** append its corresponding ID tag at the end of the sentence. For example: "The company focuses on AI development [Source ID: 1]."
-3.  If a sentence synthesizes information from multiple sources, cite all of them.
+2.  When you use information from a source, you **MUST** append its corresponding ID tag at the end of the sentence.
+3.  **DO NOT group citations.** Each citation must be in its own brackets. Incorrect: `[1, 2]`. Correct: `[1][2]`.
 4.  At the end of your entire report, you **MUST** include a section titled `---REFERENCES---`.
-5.  Under this title, list **ONLY** the sources you actually cited in your report. Format it as: `[Source ID: X] Title of the source`
+5.  Under this title, list **ONLY** the sources you actually cited. Format it as: `[Source ID: X] Title of the source`.
 
 **Information Provided:**
 1.  **Company & Role:** {company_name} {job_title_context}
@@ -107,7 +107,7 @@ Identify 'red flags' for shell companies or scams. **Cite your sources for every
 Analyze the applicant's match with the company and role. **Cite your sources.** If no resume is provided, state that this section is unavailable.
 
 **4. Online Reputation Summary (from Job Sites):**
-This is a new, mandatory section. Specifically look for information from sources identified as LinkedIn, Glassdoor, or Indeed in the Research Data. Summarize the key positive and negative points mentioned on these platforms regarding company culture, salary, interviews, etc. **Cite every point you make.** If no information from these sites is available, state that.
+This is a new, mandatory section. Specifically look for information from sources identified as LinkedIn, Glassdoor, or Indeed in the Research Data. Summarize the key positive and negative points mentioned on these platforms. **Cite every point you make.** If no information from these sites was found in the provided data, state: "A specific summary from job sites like Glassdoor or LinkedIn is unavailable due to a lack of direct employee reviews in the search results for this query."
 
 **5. Final Risk Assessment:**
 Conclude with a risk rating: **Low, Medium, or High**. Justify your rating with evidence from ALL previous sections and **cite the sources** that led to your conclusion.
@@ -120,7 +120,7 @@ Conclude with a risk rating: **Low, Medium, or High**. Justify your rating with 
 # --- 6. API路由 (无变化, 逻辑已能支持新Prompt) ---
 @app.route('/analyze', methods=['POST'])
 def analyze_company_text():
-    print("--- V4.0 Final Summary Analysis request received! ---")
+    print("--- V4.1 Final Prompt-Tuning Analysis request received! ---")
     try:
         data = request.get_json()
         company_name = data.get('companyName')
@@ -226,6 +226,8 @@ def analyze_company_text():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
+
+
 
 
 
