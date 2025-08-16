@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 3.0 - 引用增强版 (Citation Enhanced)
-# 描述: 重构了数据处理和Prompt，使AI能够生成带有来源引用的分析报告，确保信息可追溯。
+# 版本: 3.1 - 最终修正版 (Final Fix)
+# 描述: 修正了调用Google Search API时参数顺序错误的bug。
 # -----------------------------------------------------------------------------
 
 import os
 import requests
 import google.generativeai as genai
 import time
-import re # 导入正则表达式库用于解析引用
+import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from bs4 import BeautifulSoup
@@ -30,7 +30,7 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 3. 辅助函数：执行Google搜索 (无变化) ---
+# --- 3. 辅助函数：执行Google搜索 (函数定义无变化) ---
 def perform_google_search(query, api_key, cse_id, num_results=4):
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results}
@@ -70,8 +70,7 @@ def scrape_website_for_text(url):
         print(f"❌ 解析HTML时发生未知错误: {e}")
         return None
 
-
-# --- 5. 【核心改造】核心AI指令 (Prompt) ---
+# --- 5. 核心AI指令 (Prompt) (无变化) ---
 PROMPT_TEMPLATE = """
 As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report.
 **Crucially, you must adhere to the citation rules and generate the entire response strictly in {output_language}.**
@@ -116,10 +115,10 @@ Conclude with a risk rating: **Low, Medium, or High**. Justify your rating with 
 **Remember to end your response with the `---REFERENCES---` section.**
 """
 
-# --- 6. 【核心改造】API路由 ---
+# --- 6. API路由 (已修正) ---
 @app.route('/analyze', methods=['POST'])
 def analyze_company_text():
-    print("--- V3.0 Citation-Enhanced Analysis request received! ---")
+    print("--- V3.1 Final Fix Analysis request received! ---")
     try:
         data = request.get_json()
         company_name = data.get('companyName')
@@ -130,12 +129,10 @@ def analyze_company_text():
         if not company_name:
             return jsonify({"error": "Company name is required."}), 400
 
-        # --- 数据准备阶段 ---
         context_blocks = []
-        source_map = {} # 用于存储ID到源信息的映射
+        source_map = {}
         source_id_counter = 1
 
-        # 1. 执行Google搜索并结构化
         print(f"Searching for: {company_name}")
         search_queries = [
             f'"{company_name}" company culture review',
@@ -143,7 +140,8 @@ def analyze_company_text():
             f'"{company_name}" scam OR fraud OR fake'
         ]
         for query in search_queries:
-            snippets, sources_data = perform_google_search(SEARCH_API_KEY, SEARCH_ENGINE_ID, query)
+            # 【核心修正】修正了函数调用的参数顺序
+            snippets, sources_data = perform_google_search(query, SEARCH_API_KEY, SEARCH_ENGINE_ID)
             for i, snippet in enumerate(snippets):
                 if i < len(sources_data):
                     source_info = sources_data[i]
@@ -152,8 +150,8 @@ def analyze_company_text():
                     source_id_counter += 1
             time.sleep(0.5)
 
-        # 2. 爬取官网并结构化
-        _, official_site_sources = perform_google_search(SEARCH_API_KEY, SEARCH_ENGINE_ID, f'"{company_name}" official website', 1)
+        # 【核心修正】修正了函数调用的参数顺序
+        _, official_site_sources = perform_google_search(f'"{company_name}" official website', SEARCH_API_KEY, SEARCH_ENGINE_ID, 1)
         if official_site_sources and 'link' in official_site_sources[0]:
             website_url = official_site_sources[0]['link']
             scraped_content = scrape_website_for_text(website_url)
@@ -169,7 +167,6 @@ def analyze_company_text():
         context_with_sources = "\n\n".join(context_blocks)
         print(f"Prepared {len(context_blocks)} context blocks for AI.")
 
-        # --- Prompt 格式化和 AI 调用 ---
         language_instructions = {'en': 'English', 'zh-CN': 'Simplified Chinese (简体中文)', 'zh-TW': 'Traditional Chinese (繁體中文)'}
         output_language = language_instructions.get(lang_code, 'English')
         job_title_context = f"for the role of '{job_title}'" if job_title else ""
@@ -186,7 +183,6 @@ def analyze_company_text():
         response = model.generate_content(full_prompt)
         ai_response_text = response.text
         
-        # --- 结果后处理阶段 ---
         print("Received response from Gemini. Parsing citations...")
         analysis_part = ai_response_text
         references_part = ""
@@ -196,20 +192,13 @@ def analyze_company_text():
             parts = ai_response_text.split("---REFERENCES---")
             analysis_part = parts[0].strip()
             references_part = parts[1].strip()
-
-            # 从 REFERENCES 部分解析出被引用的 source ID
             cited_ids = re.findall(r'\[Source ID: (\d+)\]', references_part)
-            
-            # 根据被引用的ID，从source_map中查找完整的源信息
             for sid_str in cited_ids:
                 sid = int(sid_str)
                 if sid in source_map:
-                    # 添加一个 'id' 字段用于前端显示
                     source_detail = source_map[sid]
                     source_detail['id'] = sid
                     final_sources.append(source_detail)
-            
-            # 为了美观，将主报告中的 [Source ID: X] 替换为更简洁的 [X]
             analysis_part = re.sub(r'\[Source ID: (\d+)\]', r'[\1]', analysis_part)
 
         print(f"Successfully parsed {len(final_sources)} cited sources.")
@@ -222,5 +211,4 @@ def analyze_company_text():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
-
 
