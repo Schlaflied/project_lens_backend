@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 4.2 - 终极校对版 (Final Auto-Correction Version)
-# 描述: 增加了后端自动校正逻辑，强制修正AI不规范的引用格式。
+# 版本: 4.3 - 终极稳定版 (Final Stable Version)
+# 描述: 增加了能处理多种错误格式的终极校对逻辑，确保引用链接100%可点击。
 # -----------------------------------------------------------------------------
 
 import os
@@ -71,7 +71,7 @@ def scrape_website_for_text(url):
         print(f"❌ 解析HTML时发生未知错误: {e}")
         return None
 
-# --- 5. 【核心改造】核心AI指令 (Prompt) ---
+# --- 5. 核心AI指令 (Prompt) (无变化) ---
 PROMPT_TEMPLATE = """
 As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report.
 **Crucially, you must adhere to the citation rules and generate the entire response strictly in {output_language}.**
@@ -114,13 +114,13 @@ Conclude with a risk rating: **Low, Medium, or High**. Justify your rating with 
 
 **Remember to end your response with the `---REFERENCES---` section.**
 """
-# --- End of Prompt Change ---
+# --- End of Prompt ---
 
 
 # --- 6. API路由 (已更新) ---
 @app.route('/analyze', methods=['POST'])
 def analyze_company_text():
-    print("--- V4.2 Auto-Correction Analysis request received! ---")
+    print("--- V4.3 Final Stable Version Analysis request received! ---")
     try:
         data = request.get_json()
         company_name = data.get('companyName')
@@ -198,21 +198,29 @@ def analyze_company_text():
         response = model.generate_content(full_prompt)
         ai_response_text = response.text
         
-        print("Received response from Gemini. Applying auto-correction...")
+        print("Received response from Gemini. Applying final auto-correction...")
 
-        # --- 【核心校对官】在这里修正AI不规范的引用 ---
-        def expand_grouped_citations(match):
-            # Takes a match object for a pattern like "[1, 2, 3]"
-            # Extracts the inner string "1, 2, 3"
+        # --- 【终极校对官】在这里修正AI所有不规范的引用 ---
+        
+        # 校对函数 1: 展开 "[Source ID: 1, Source ID: 2]" 格式
+        def expand_full_grouped_citations(match):
+            full_match_string = match.group(0)
+            ids = re.findall(r'\d+', full_match_string)
+            return "".join([f"[Source ID: {i}]" for i in ids])
+
+        # 校对函数 2: 展开 "[1, 2, 3]" 格式
+        def expand_simple_grouped_citations(match):
             id_string = match.group(1)
-            # Splits into individual numbers, strips whitespace
             ids = [i.strip() for i in id_string.split(',')]
-            # Joins them back as "[1][2][3]"
-            return "".join([f"[{i}]" for i in ids])
+            # Important: Convert to the full format so the final replacement works correctly
+            return "".join([f"[Source ID: {i}]" for i in ids])
 
-        # This regex finds any bracketed list with at least one comma
-        # e.g., [1,2], [1, 2, 3], but not [1]
-        corrected_text = re.sub(r'\[(\d+,\s*[\d,\s]*)\]', expand_grouped_citations, ai_response_text)
+        # 第一轮校对: 修正带 "Source ID" 的合并引用
+        corrected_text = re.sub(r'\[(Source ID: \d+(?:,\s*Source ID: \d+)+)\]', expand_full_grouped_citations, ai_response_text)
+        
+        # 第二轮校对: 修正纯数字的合并引用
+        corrected_text = re.sub(r'\[(\d+,\s*[\d,\s]*)\]', expand_simple_grouped_citations, corrected_text)
+        
         # --- 校对结束 ---
 
         print("Parsing citations...")
@@ -232,7 +240,7 @@ def analyze_company_text():
                     source_detail['id'] = sid
                     final_sources.append(source_detail)
             
-            # This final replacement makes the citations in the text clickable
+            # 最后一步: 把所有规范的 [Source ID: X] 转换成前端需要 [X] 格式
             analysis_part = re.sub(r'\[Source ID: (\d+)\]', r'[\1]', analysis_part)
 
         print(f"Successfully parsed {len(final_sources)} cited sources.")
@@ -245,8 +253,6 @@ def analyze_company_text():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
-
-
 
 
 
