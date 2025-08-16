@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 3.3 - 图标支持版 (Icon Support)
-# 描述: 为来源信息增加类型标签，以便前端显示不同网站的图标。
+# 版本: 4.0 - 最终汇总版 (Final Summary Version)
+# 描述: 增加了一个专门的板块，用于汇总来自各大求职网站的评价。
 # -----------------------------------------------------------------------------
 
 import os
@@ -14,7 +14,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from bs4 import BeautifulSoup
 
-# --- Sections 1 to 5 (Initialization, Keys, Helpers, Prompt) have NO CHANGES ---
+# --- Sections 1 to 4 have NO CHANGES ---
 # --- 1. 初始化和配置 (无变化) ---
 app = Flask(__name__)
 CORS(app)
@@ -71,7 +71,7 @@ def scrape_website_for_text(url):
         print(f"❌ 解析HTML时发生未知错误: {e}")
         return None
 
-# --- 5. 核心AI指令 (Prompt) (无变化) ---
+# --- 5. 【核心改造】核心AI指令 (Prompt) ---
 PROMPT_TEMPLATE = """
 As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report.
 **Crucially, you must adhere to the citation rules and generate the entire response strictly in {output_language}.**
@@ -79,7 +79,7 @@ As 'Project Lens', an expert AI assistant for job seekers, your task is to gener
 **Citation Rules (VERY IMPORTANT):**
 1.  The information provided below is structured with a unique `[Source ID: X]`.
 2.  When you use information from a source to form your analysis, you **MUST** append its corresponding ID tag at the end of the sentence. For example: "The company focuses on AI development [Source ID: 1]."
-3.  If a sentence synthesizes information from multiple sources, cite all of them. For example: "The work-life balance is reportedly poor, but the pay is high [Source ID: 2][Source ID: 3]."
+3.  If a sentence synthesizes information from multiple sources, cite all of them.
 4.  At the end of your entire report, you **MUST** include a section titled `---REFERENCES---`.
 5.  Under this title, list **ONLY** the sources you actually cited in your report. Format it as: `[Source ID: X] Title of the source`
 
@@ -95,33 +95,32 @@ As 'Project Lens', an expert AI assistant for job seekers, your task is to gener
     ```
 
 **Your Task:**
-Synthesize all the information to create a comprehensive report with citations. The report MUST include the following sections:
+Synthesize all the information to create a comprehensive report with citations. The report MUST include the following sections IN THIS ORDER:
 
 **1. Culture-Fit Analysis:**
 Analyze Work-Life Balance, Team Collaboration, and Growth Opportunities. **Cite your sources.**
 
 **2. Corporate Investigator Report (Highest Priority):**
-Identify 'red flags' for shell companies or scams. **Cite your sources for every claim.** Check for:
-* Vague or glamorous descriptions.
-* Requests for fees.
-* Inconsistent information.
-* Poor digital footprint.
+Identify 'red flags' for shell companies or scams. **Cite your sources for every claim.**
 
 **3. Personalized Match Analysis (if resume is provided):**
 Analyze the applicant's match with the company and role. **Cite your sources.** If no resume is provided, state that this section is unavailable.
 
-**4. Final Risk Assessment:**
-Conclude with a clear risk rating: **Low, Medium, or High**. Justify your rating with evidence and **cite the sources** that led to your conclusion.
+**4. Online Reputation Summary (from Job Sites):**
+This is a new, mandatory section. Specifically look for information from sources identified as LinkedIn, Glassdoor, or Indeed in the Research Data. Summarize the key positive and negative points mentioned on these platforms regarding company culture, salary, interviews, etc. **Cite every point you make.** If no information from these sites is available, state that.
+
+**5. Final Risk Assessment:**
+Conclude with a risk rating: **Low, Medium, or High**. Justify your rating with evidence from ALL previous sections and **cite the sources** that led to your conclusion.
 
 **Remember to end your response with the `---REFERENCES---` section.**
 """
-# --- End of unchanged sections ---
+# --- End of Prompt Change ---
 
 
-# --- 6. API路由 (已更新) ---
+# --- 6. API路由 (无变化, 逻辑已能支持新Prompt) ---
 @app.route('/analyze', methods=['POST'])
 def analyze_company_text():
-    print("--- V3.3 Icon Support Analysis request received! ---")
+    print("--- V4.0 Final Summary Analysis request received! ---")
     try:
         data = request.get_json()
         company_name = data.get('companyName')
@@ -152,8 +151,6 @@ def analyze_company_text():
             for i, snippet in enumerate(snippets):
                 if i < len(sources_data):
                     source_info = sources_data[i]
-                    
-                    # --- 【核心更新】在这里给来源打上标签 ---
                     link = source_info.get('link', '').lower()
                     if 'linkedin.com' in link:
                         source_info['source_type'] = 'linkedin'
@@ -163,7 +160,6 @@ def analyze_company_text():
                         source_info['source_type'] = 'indeed'
                     else:
                         source_info['source_type'] = 'default'
-                    # --- 标签结束 ---
 
                     context_blocks.append(f"[Source ID: {source_id_counter}] {snippet}")
                     source_map[source_id_counter] = source_info
@@ -230,6 +226,7 @@ def analyze_company_text():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
