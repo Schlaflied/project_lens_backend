@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 4.3 - 终极稳定版 (Final Stable Version)
-# 描述: 增加了能处理多种错误格式的终极校对逻辑，确保引用链接100%可点击。
+# 版本: 5.0 - 集成限流策略 (Rate Limiting Integrated)
+# 描述: 增加了基于IP的每日请求限流功能，并根据策划书定制了超额提示。
 # -----------------------------------------------------------------------------
 
 import os
@@ -13,11 +13,23 @@ import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from bs4 import BeautifulSoup
+# --- 新增：导入限流库 ---
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
-# --- Sections 1 to 4 have NO CHANGES ---
-# --- 1. 初始化和配置 (无变化) ---
+# --- 1. 初始化和配置 ---
 app = Flask(__name__)
 CORS(app)
+
+# --- 新增：初始化限流器 ---
+# 使用 get_remote_address 来根据用户的IP地址进行限流
+# Cloud Run 等环境会自动处理代理背后的真实IP，所以这很可靠
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"], # 设置默认的全局限流
+    storage_uri="memory://" # 使用内存存储，简单高效
+)
 
 # --- 2. API密钥配置 (无变化) ---
 try:
@@ -117,10 +129,11 @@ Conclude with a risk rating: **Low, Medium, or High**. Justify your rating with 
 # --- End of Prompt ---
 
 
-# --- 6. API路由 (已更新) ---
+# --- 6. API路由 (已更新限流) ---
 @app.route('/analyze', methods=['POST'])
+@limiter.limit("10 per day") # --- 新增：应用限流规则！每天每个IP 10次 ---
 def analyze_company_text():
-    print("--- V4.3 Final Stable Version Analysis request received! ---")
+    print("--- V5.0 Rate-Limited Analysis request received! ---")
     try:
         data = request.get_json()
         company_name = data.get('companyName')
@@ -200,29 +213,19 @@ def analyze_company_text():
         
         print("Received response from Gemini. Applying final auto-correction...")
 
-        # --- 【终极校对官】在这里修正AI所有不规范的引用 ---
-        
-        # 校对函数 1: 展开 "[Source ID: 1, Source ID: 2]" 格式
         def expand_full_grouped_citations(match):
             full_match_string = match.group(0)
             ids = re.findall(r'\d+', full_match_string)
             return "".join([f"[Source ID: {i}]" for i in ids])
 
-        # 校对函数 2: 展开 "[1, 2, 3]" 格式
         def expand_simple_grouped_citations(match):
             id_string = match.group(1)
             ids = [i.strip() for i in id_string.split(',')]
-            # Important: Convert to the full format so the final replacement works correctly
             return "".join([f"[Source ID: {i}]" for i in ids])
 
-        # 第一轮校对: 修正带 "Source ID" 的合并引用
         corrected_text = re.sub(r'\[(Source ID: \d+(?:,\s*Source ID: \d+)+)\]', expand_full_grouped_citations, ai_response_text)
-        
-        # 第二轮校对: 修正纯数字的合并引用
         corrected_text = re.sub(r'\[(\d+,\s*[\d,\s]*)\]', expand_simple_grouped_citations, corrected_text)
         
-        # --- 校对结束 ---
-
         print("Parsing citations...")
         analysis_part = corrected_text
         references_part = ""
@@ -240,7 +243,6 @@ def analyze_company_text():
                     source_detail['id'] = sid
                     final_sources.append(source_detail)
             
-            # 最后一步: 把所有规范的 [Source ID: X] 转换成前端需要 [X] 格式
             analysis_part = re.sub(r'\[Source ID: (\d+)\]', r'[\1]', analysis_part)
 
         print(f"Successfully parsed {len(final_sources)} cited sources.")
@@ -250,9 +252,25 @@ def analyze_company_text():
         print(f"!!! 发生未知错误: {e} !!!")
         return jsonify({"error": "An internal server error occurred."}), 500
 
+# --- 新增：自定义错误处理函数 ---
+# 当用户超过限流次数时，返回这个定制的JSON信息
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    # 这是根据你的策划书定制的提示信息
+    error_message = (
+        "开拓者，您今日的免费分析额度已用尽！🚀\n\n"
+        "Project Lens 每天为所有用户提供10次免费分析。\n"
+        "如果您是需要进行大量研究的‘超级用户’，可以考虑升级到 Pro 版本，或通过‘请我喝杯咖啡☕️’来立即重置额度！"
+    )
+    # 返回一个特殊的字段，让前端可以识别这是限流错误
+    return jsonify(error="rate_limit_exceeded", message=error_message), 429
+
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
+
+
 
 
 
