@@ -6,4 +6,5 @@ google-generativeai
 Flask-Cors
 requests
 beautifulsoup4
+Flask-Limiter
 
