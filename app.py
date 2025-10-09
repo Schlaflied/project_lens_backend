@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 12.3 - 智能实体提取 (Smart Entity Extraction)
-# 描述: 新增了一个AI预处理步骤。现在后端会先从用户粘贴的大段文本（如JD）中
-#       智能提取出公司名称和职位名称，然后再用这些精确信息去执行搜索，
-#       极大地提高了信息检索的准确率和成功率。
+# 版本: 12.4 - 依赖修正 (Dependency Fix)
+# 描述: 修正了调用google-generativeai库时的一个语法问题。
+#       将 `genai.types.GenerationConfig` 更新为正确的 `genai.GenerationConfig`，
+#       解决了导致服务器内部错误的bug。
 # -----------------------------------------------------------------------------
 
 import os
@@ -42,7 +42,7 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 新增功能：智能提取公司和职位名称 ---
+# --- 3. 智能提取公司和职位名称 (已修正) ---
 def extract_entities_with_ai(text_blob):
     """
     使用AI从大段文本中提取公司和职位名称。
@@ -60,7 +60,8 @@ def extract_entities_with_ai(text_blob):
         {text_blob}
         ---
         """
-        generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
+        # --- 修正点: 移除了 .types ---
+        generation_config = genai.GenerationConfig(response_mime_type="application/json")
         response = model.generate_content(prompt, generation_config=generation_config)
         
         entities = json.loads(response.text)
@@ -68,12 +69,10 @@ def extract_entities_with_ai(text_blob):
         job_title = entities.get("job_title", "")
         
         print(f"✅ AI提取成功: 公司='{company}', 职位='{job_title}'")
-        # 如果AI未能提取公司名，则将原始文本作为备用公司名
         return company if company else text_blob, job_title
         
     except Exception as e:
         print(f"❌ AI实体提取失败: {e}. 将使用原始文本进行搜索。")
-        # 如果提取失败，就返回原始文本作为公司名
         return text_blob, ""
 
 
@@ -168,10 +167,9 @@ Synthesize all the information to create a comprehensive report. The output **MU
 @app.route('/analyze', methods=['POST'])
 @limiter.limit("5 per day")
 def analyze_company_text():
-    print("--- v12.3 Smart Extraction Analysis request received! ---")
+    print("--- v12.4 Dependency Fix Analysis request received! ---")
     try:
         data = request.get_json()
-        # 从前端获取完整文本块
         smart_paste_content = data.get('companyName') 
         resume_text = data.get('resumeText', 'No resume provided.')
         lang_code = data.get('language', 'en')
@@ -180,9 +178,7 @@ def analyze_company_text():
         if not smart_paste_content:
             return jsonify({"error": "Company name / job info is required."}), 400
 
-        # --- 核心改动：在这里调用AI进行预处理 ---
         company_name, job_title = extract_entities_with_ai(smart_paste_content)
-        # ------------------------------------
 
         context_blocks = []
         source_map = {}
@@ -245,7 +241,8 @@ def analyze_company_text():
         )
         
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
+        # --- 修正点: 移除了 .types ---
+        generation_config = genai.GenerationConfig(response_mime_type="application/json")
         response = model.generate_content(full_prompt, generation_config=generation_config)
         
         try:
@@ -281,13 +278,4 @@ def ratelimit_handler(e):
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
-
-
-
-
-
-
-
-
-
 
