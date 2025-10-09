@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 12.1 - 图标逻辑集成 (Icon Logic Integration)
-# 描述: 这个版本没有核心功能变化，主要是为了与前端的图标显示逻辑保持一致，
-#       确保后端在处理来源时，能正确识别并标记源类型（linkedin, glassdoor, etc.）。
+# 版本: 12.3 - 智能实体提取 (Smart Entity Extraction)
+# 描述: 新增了一个AI预处理步骤。现在后端会先从用户粘贴的大段文本（如JD）中
+#       智能提取出公司名称和职位名称，然后再用这些精确信息去执行搜索，
+#       极大地提高了信息检索的准确率和成功率。
 # -----------------------------------------------------------------------------
 
 import os
@@ -41,7 +42,42 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 3. 辅助函数：执行Google搜索 (无变化) ---
+# --- 新增功能：智能提取公司和职位名称 ---
+def extract_entities_with_ai(text_blob):
+    """
+    使用AI从大段文本中提取公司和职位名称。
+    """
+    print("🤖 启动AI实体提取程序...")
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        prompt = f"""
+        From the following job description or text, please extract the company name and the job title.
+        Provide the output as a JSON object with two keys: "company_name" and "job_title".
+        If you cannot find a specific job title, set its value to an empty string "".
+
+        Text:
+        ---
+        {text_blob}
+        ---
+        """
+        generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
+        response = model.generate_content(prompt, generation_config=generation_config)
+        
+        entities = json.loads(response.text)
+        company = entities.get("company_name", "")
+        job_title = entities.get("job_title", "")
+        
+        print(f"✅ AI提取成功: 公司='{company}', 职位='{job_title}'")
+        # 如果AI未能提取公司名，则将原始文本作为备用公司名
+        return company if company else text_blob, job_title
+        
+    except Exception as e:
+        print(f"❌ AI实体提取失败: {e}. 将使用原始文本进行搜索。")
+        # 如果提取失败，就返回原始文本作为公司名
+        return text_blob, ""
+
+
+# --- 4. 辅助函数：执行Google搜索 (无变化) ---
 def perform_google_search(query, api_key, cse_id, num_results=4):
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results}
@@ -56,7 +92,7 @@ def perform_google_search(query, api_key, cse_id, num_results=4):
         print(f"Google搜索请求失败: {e}")
         return [], []
 
-# --- 4. 辅助函数：网页爬虫 (无变化) ---
+# --- 5. 辅助函数：网页爬虫 (无变化) ---
 def scrape_website_for_text(url):
     print(f"🚀 准备爬取网站: {url}")
     try:
@@ -78,7 +114,7 @@ def scrape_website_for_text(url):
         print(f"❌ 爬取或解析网站时发生错误: {e}")
         return None
 
-# --- 5. 核心AI指令 (Prompt) --- (无变化) ---
+# --- 6. 核心AI指令 (Prompt) (无变化) ---
 PROMPT_TEMPLATE = """
 As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report.
 **Crucially, you must generate the entire response strictly as a JSON object and in {output_language}.**
@@ -89,7 +125,7 @@ As 'Project Lens', an expert AI assistant for job seekers, your task is to gener
 3. In the final JSON, include a `cited_ids` array containing all unique source IDs you used in the report.
 
 **Information Provided:**
-1. **Company & Context:** {company_name}
+1. **Company & Role:** {company_name} - {job_title}
 2. **User-Selected Aspects of Interest:** {aspects_list}
 3. **Applicant's Resume/Bio (if provided):**
    ```
@@ -127,28 +163,32 @@ Synthesize all the information to create a comprehensive report. The output **MU
 }}
 ```
 """
-# --- End of Prompt ---
 
-# --- 6. API路由 --- (无变化, 逻辑已包含图标类型) ---
+# --- 7. API路由 (已升级) ---
 @app.route('/analyze', methods=['POST'])
 @limiter.limit("5 per day")
 def analyze_company_text():
-    print("--- v12.1 Structured JSON Analysis request received! ---")
+    print("--- v12.3 Smart Extraction Analysis request received! ---")
     try:
         data = request.get_json()
-        company_name = data.get('companyName')
+        # 从前端获取完整文本块
+        smart_paste_content = data.get('companyName') 
         resume_text = data.get('resumeText', 'No resume provided.')
         lang_code = data.get('language', 'en')
         aspects = data.get('aspects', [])
 
-        if not company_name:
+        if not smart_paste_content:
             return jsonify({"error": "Company name / job info is required."}), 400
+
+        # --- 核心改动：在这里调用AI进行预处理 ---
+        company_name, job_title = extract_entities_with_ai(smart_paste_content)
+        # ------------------------------------
 
         context_blocks = []
         source_map = {}
         source_id_counter = 1
 
-        print(f"Searching for: {company_name}")
+        print(f"Searching for extracted company: {company_name}")
         
         base_queries = [
             f'"{company_name}" company culture review',
@@ -161,17 +201,13 @@ def analyze_company_text():
         ]
         
         aspect_query_map = {
-            'wlb': f'"{company_name}" work life balance',
-            'growth': f'"{company_name}" growth opportunities',
-            'salary': f'"{company_name}" salary level benefits',
-            'overtime': f'"{company_name}" overtime culture',
-            'management': f'"{company_name}" management style',
-            'sustainability': f'"{company_name}" sustainability social responsibility',
+            'wlb': f'"{company_name}" work life balance', 'growth': f'"{company_name}" growth opportunities',
+            'salary': f'"{company_name}" salary level benefits', 'overtime': f'"{company_name}" overtime culture',
+            'management': f'"{company_name}" management style', 'sustainability': f'"{company_name}" sustainability social responsibility',
         }
         
         for aspect_key in aspects:
-            if aspect_key in aspect_query_map:
-                base_queries.append(aspect_query_map[aspect_key])
+            if aspect_key in aspect_query_map: base_queries.append(aspect_query_map[aspect_key])
 
         search_queries = list(set(base_queries))
 
@@ -181,20 +217,20 @@ def analyze_company_text():
                 if i < len(sources_data):
                     source_info = sources_data[i]
                     link = source_info.get('link', '').lower()
-                    
-                    # --- 这部分逻辑就是为前端准备图标类型的关键 ---
                     if 'linkedin.com' in link: source_info['source_type'] = 'linkedin'
                     elif 'glassdoor.com' in link: source_info['source_type'] = 'glassdoor'
                     elif 'indeed.com' in link: source_info['source_type'] = 'indeed'
                     else: source_info['source_type'] = 'default'
-
                     context_blocks.append(f"[Source ID: {source_id_counter}] {snippet}")
                     source_map[source_id_counter] = source_info
                     source_id_counter += 1
             time.sleep(0.5)
 
         if not context_blocks:
-             return jsonify({"report": {"red_flag_text":"No information found for this company."}, "sources": []})
+             return jsonify({
+                "report": {"red_flag_text": "No information found for this company. Please try using the official full name."}, 
+                "sources": []
+             })
 
         context_with_sources = "\n\n".join(context_blocks)
         print(f"Prepared {len(context_blocks)} context blocks for AI.")
@@ -203,18 +239,13 @@ def analyze_company_text():
         output_language = language_instructions.get(lang_code, 'English')
         
         full_prompt = PROMPT_TEMPLATE.format(
-            output_language=output_language,
-            company_name=company_name,
-            aspects_list=", ".join(aspects),
-            resume_text=resume_text,
+            output_language=output_language, company_name=company_name, job_title=job_title,
+            aspects_list=", ".join(aspects), resume_text=resume_text,
             context_with_sources=context_with_sources
         )
         
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        generation_config = genai.types.GenerationConfig(
-            response_mime_type="application/json"
-        )
-        
+        generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
         response = model.generate_content(full_prompt, generation_config=generation_config)
         
         try:
@@ -230,8 +261,7 @@ def analyze_company_text():
             if sid in source_map:
                 source_detail = source_map[sid]
                 source_detail['id'] = sid
-                if source_detail not in final_sources:
-                    final_sources.append(source_detail)
+                if source_detail not in final_sources: final_sources.append(source_detail)
 
         print(f"Successfully parsed report and {len(final_sources)} cited sources.")
         return jsonify({"report": report_data, "sources": final_sources})
@@ -240,17 +270,14 @@ def analyze_company_text():
         print(f"!!! 发生未知错误: {e} !!!")
         return jsonify({"error": "An internal server error occurred."}), 500
 
-# --- 7. 错误处理 (无变化) ---
+# --- 8. 错误处理 (无变化) ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
-    error_message = (
-        "开拓者，您今日的免费分析额度已用尽！🚀\n\n"
-        "Project Lens 每天为所有用户提供5次免费分析。\n"
-        "如果您是需要进行大量研究的‘超级用户’，可以考虑升级到 Pro 版本，或通过‘请我喝杯咖啡☕️’来立即重置额度！"
-    )
+    error_message = ("开拓者，您今日的免费分析额度已用尽！🚀\n\n"
+        "Project Lens 每天为所有用户提供5次免费分析。")
     return jsonify(error="rate_limit_exceeded", message=error_message), 429
 
-# --- 8. 启动 (无变化) ---
+# --- 9. 启动 (无变化) ---
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
