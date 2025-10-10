@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 12.9 - 最终稳健版 (Final Robust Version)
-# 描述: 将 PROMPT_TEMPLATE 的定义方式从三引号多行字符串改为更稳健的
-#       多行字符串拼接方式，以彻底避免因复制粘贴可能引入的语法错误。
+# 版本: 13.0 - 模型更新版 (Model Update Version)
+# 描述: 根据日志报错信息，将调用的 Gemini 模型从不被识别的 "gemini-1.5-flash-latest"
+#       更新为官方推荐的、更稳定强大的 "gemini-1.5-pro-latest"，
+#       从根本上解决模型 "not found" 的 404 错误。
 # -----------------------------------------------------------------------------
 
 import os
@@ -42,11 +43,12 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 3. 智能提取公司和职位名称 ---
+# --- 3. 智能提取公司和职位名称 [已更新模型] ---
 def extract_entities_with_ai(text_blob):
-    print("🤖 启动AI实体提取程序...")
+    print("🤖 启动AI实体提取程序 (使用 gemini-1.5-pro)...")
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # 【核心修正】更新为官方推荐的稳定模型
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         prompt = (
             'From the following job description or text, please extract the company name and the job title.\n'
             'Provide the output as a JSON object with two keys: "company_name" and "job_title".\n'
@@ -111,7 +113,7 @@ def scrape_website_for_text(url):
         print(f"❌ 爬取或解析网站时发生错误: {e}")
         return None
 
-# --- 6. 核心AI指令 (Prompt) [已重构为更稳健的格式] ---
+# --- 6. 核心AI指令 (Prompt) ---
 PROMPT_TEMPLATE = (
     "As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report.\n"
     "**Crucially, you must generate the entire response strictly as a JSON object and in {output_language}.**\n"
@@ -157,14 +159,14 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-# --- 7. API路由 ---
+# --- 7. API路由 [已更新模型] ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'}), 200
         
-    print("--- v12.9 Robust Version Analysis request received! ---")
+    print("--- v13.0 Model Update Analysis request received! ---")
     try:
         data = request.get_json()
         if data is None:
@@ -236,7 +238,8 @@ def analyze_company_text():
             context_with_sources=context_with_sources
         )
         
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # 【核心修正】更新为官方推荐的稳定模型
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         generation_config = genai.GenerationConfig(response_mime_type="application/json")
         
         safety_settings = {
