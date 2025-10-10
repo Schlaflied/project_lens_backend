@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 12.4 - 依赖修正 (Dependency Fix)
-# 描述: 修正了调用google-generativeai库时的一个语法问题。
-#       将 `genai.types.GenerationConfig` 更新为正确的 `genai.GenerationConfig`，
-#       解决了导致服务器内部错误的bug。
+# 版本: 12.5 - 鲁棒性增强 (Robustness Enhanced)
+# 描述: 增加了对AI响应的“前置检查”。现在代码会先验证AI的响应是否为空或被安全策略阻止，
+#       然后再尝试解析内容。这可以优雅地处理AI拒绝回答的情况，防止后端崩溃并返回
+#       通用的500错误，而是给前端一个更明确的提示。
 # -----------------------------------------------------------------------------
 
 import os
@@ -42,7 +42,7 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 3. 智能提取公司和职位名称 (已修正) ---
+# --- 3. 智能提取公司和职位名称 (已增强) ---
 def extract_entities_with_ai(text_blob):
     """
     使用AI从大段文本中提取公司和职位名称。
@@ -60,10 +60,14 @@ def extract_entities_with_ai(text_blob):
         {text_blob}
         ---
         """
-        # --- 修正点: 移除了 .types ---
         generation_config = genai.GenerationConfig(response_mime_type="application/json")
         response = model.generate_content(prompt, generation_config=generation_config)
         
+        if not response.parts:
+            print("--- 实体提取AI响应被阻止 ---")
+            print(f"--- Prompt Feedback: {response.prompt_feedback} ---")
+            return text_blob, "" # Fallback to original text
+
         entities = json.loads(response.text)
         company = entities.get("company_name", "")
         job_title = entities.get("job_title", "")
@@ -163,11 +167,11 @@ Synthesize all the information to create a comprehensive report. The output **MU
 ```
 """
 
-# --- 7. API路由 (已升级) ---
+# --- 7. API路由 (已增强) ---
 @app.route('/analyze', methods=['POST'])
 @limiter.limit("5 per day")
 def analyze_company_text():
-    print("--- v12.4 Dependency Fix Analysis request received! ---")
+    print("--- v12.5 Robustness Enhanced Analysis request received! ---")
     try:
         data = request.get_json()
         smart_paste_content = data.get('companyName') 
@@ -180,6 +184,9 @@ def analyze_company_text():
 
         company_name, job_title = extract_entities_with_ai(smart_paste_content)
 
+        if not company_name:
+             return jsonify({"error": "Could not identify a company name from the provided text."}), 400
+
         context_blocks = []
         source_map = {}
         source_id_counter = 1
@@ -187,12 +194,9 @@ def analyze_company_text():
         print(f"Searching for extracted company: {company_name}")
         
         base_queries = [
-            f'"{company_name}" company culture review',
-            f'"{company_name}" scam OR fraud OR fake',
-            f'site:linkedin.com "{company_name}" employees OR culture',
-            f'site:indeed.com "{company_name}" reviews',
-            f'site:glassdoor.com "{company_name}" reviews',
-            f'"{company_name}" hiring process review',
+            f'"{company_name}" company culture review', f'"{company_name}" scam OR fraud OR fake',
+            f'site:linkedin.com "{company_name}" employees OR culture', f'site:indeed.com "{company_name}" reviews',
+            f'site:glassdoor.com "{company_name}" reviews', f'"{company_name}" hiring process review',
             f'"{company_name}" no response after interview OR ghosted'
         ]
         
@@ -241,16 +245,24 @@ def analyze_company_text():
         )
         
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        # --- 修正点: 移除了 .types ---
         generation_config = genai.GenerationConfig(response_mime_type="application/json")
-        response = model.generate_content(full_prompt, generation_config=generation_config)
+        response = model.generate_content(full_prompt, generation_config=generation_config, safety_settings={'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE'})
         
+        if not response.parts:
+            print("!!! 主报告生成被阻止或为空 !!!")
+            print(f"--- Prompt Feedback: {response.prompt_feedback} ---")
+            if response.candidates:
+                print(f"--- Finish Reason: {response.candidates[0].finish_reason} ---")
+                print(f"--- Safety Ratings: {response.candidates[0].safety_ratings} ---")
+            return jsonify({"error": "AI response was blocked, possibly due to safety filters on the searched content."}), 500
+
         try:
             ai_json_response = json.loads(response.text)
             report_data = ai_json_response.get("report", {})
             cited_ids = ai_json_response.get("cited_ids", [])
         except json.JSONDecodeError:
-            print("!!! Gemini did not return valid JSON. Falling back. !!!")
+            print("!!! Gemini 没有返回有效的 JSON !!!")
+            print(f"--- 接收到的文本: {response.text[:500]}... ---")
             return jsonify({"error": "AI failed to generate a valid structured report."}), 500
 
         final_sources = []
