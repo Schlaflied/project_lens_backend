@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 12.5 - 鲁棒性增强 (Robustness Enhanced)
-# 描述: 增加了对AI响应的“前置检查”。现在代码会先验证AI的响应是否为空或被安全策略阻止，
-#       然后再尝试解析内容。这可以优雅地处理AI拒绝回答的情况，防止后端崩溃并返回
-#       通用的500错误，而是给前端一个更明确的提示。
+# 版本: 12.6 - 最终语法修正 (Final Syntax Fix)
+# 描述: 修正了safety_settings参数中的一个致命的语法错误。
+#       将未加引号的键 HARM_CATEGORY_HARASSMENT 修改为正确的字符串 "HARM_CATEGORY_HARASSMENT"，
+#       解决了导致程序崩溃并返回500错误的根本原因。
 # -----------------------------------------------------------------------------
 
 import os
@@ -42,11 +42,8 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 3. 智能提取公司和职位名称 (已增强) ---
+# --- 3. 智能提取公司和职位名称 (无变化) ---
 def extract_entities_with_ai(text_blob):
-    """
-    使用AI从大段文本中提取公司和职位名称。
-    """
     print("🤖 启动AI实体提取程序...")
     try:
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
@@ -66,7 +63,7 @@ def extract_entities_with_ai(text_blob):
         if not response.parts:
             print("--- 实体提取AI响应被阻止 ---")
             print(f"--- Prompt Feedback: {response.prompt_feedback} ---")
-            return text_blob, "" # Fallback to original text
+            return text_blob, ""
 
         entities = json.loads(response.text)
         company = entities.get("company_name", "")
@@ -121,12 +118,10 @@ def scrape_website_for_text(url):
 PROMPT_TEMPLATE = """
 As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report.
 **Crucially, you must generate the entire response strictly as a JSON object and in {output_language}.**
-
 **Citation Rules (VERY IMPORTANT):**
 1. The information provided below is structured with a unique `[Source ID: X]`.
 2. When you use information from a source, you **MUST** embed its corresponding ID tag (e.g., `[1]`, `[2]`) directly into the text where the information is used.
 3. In the final JSON, include a `cited_ids` array containing all unique source IDs you used in the report.
-
 **Information Provided:**
 1. **Company & Role:** {company_name} - {job_title}
 2. **User-Selected Aspects of Interest:** {aspects_list}
@@ -138,10 +133,8 @@ As 'Project Lens', an expert AI assistant for job seekers, your task is to gener
    ```
    {context_with_sources}
    ```
-
 **Your Task:**
 Synthesize all the information to create a comprehensive report. The output **MUST** be a single JSON object with the following structure. Populate each text field based on your analysis.
-
 ```json
 {{
   "report": {{
@@ -165,13 +158,12 @@ Synthesize all the information to create a comprehensive report. The output **MU
   "cited_ids": [1, 2, 3, 4, ...]
 }}
 ```
-"""
 
-# --- 7. API路由 (已增强) ---
+# --- 7. API路由 (已修正) ---
 @app.route('/analyze', methods=['POST'])
 @limiter.limit("5 per day")
 def analyze_company_text():
-    print("--- v12.5 Robustness Enhanced Analysis request received! ---")
+    print("--- v12.6 Final Syntax Fix Analysis request received! ---")
     try:
         data = request.get_json()
         smart_paste_content = data.get('companyName') 
@@ -199,16 +191,13 @@ def analyze_company_text():
             f'site:glassdoor.com "{company_name}" reviews', f'"{company_name}" hiring process review',
             f'"{company_name}" no response after interview OR ghosted'
         ]
-        
         aspect_query_map = {
             'wlb': f'"{company_name}" work life balance', 'growth': f'"{company_name}" growth opportunities',
             'salary': f'"{company_name}" salary level benefits', 'overtime': f'"{company_name}" overtime culture',
             'management': f'"{company_name}" management style', 'sustainability': f'"{company_name}" sustainability social responsibility',
         }
-        
         for aspect_key in aspects:
             if aspect_key in aspect_query_map: base_queries.append(aspect_query_map[aspect_key])
-
         search_queries = list(set(base_queries))
 
         for query in search_queries:
@@ -234,7 +223,6 @@ def analyze_company_text():
 
         context_with_sources = "\n\n".join(context_blocks)
         print(f"Prepared {len(context_blocks)} context blocks for AI.")
-
         language_instructions = {'en': 'English', 'zh-CN': 'Simplified Chinese (简体中文)', 'zh-TW': 'Traditional Chinese (繁體中文)'}
         output_language = language_instructions.get(lang_code, 'English')
         
@@ -246,7 +234,10 @@ def analyze_company_text():
         
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
         generation_config = genai.GenerationConfig(response_mime_type="application/json")
-        response = model.generate_content(full_prompt, generation_config=generation_config, safety_settings={'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE'})
+        
+        # --- 核心修正：将 HARM_CATEGORY_HARASSMENT 加上引号，使其成为合法的字符串键 ---
+        safety_settings = {"HARM_CATEGORY_HARASSMENT": "BLOCK_NONE"}
+        response = model.generate_content(full_prompt, generation_config=generation_config, safety_settings=safety_settings)
         
         if not response.parts:
             print("!!! 主报告生成被阻止或为空 !!!")
