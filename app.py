@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 12.8 - 最终修正版 (Final Fix)
-# 描述: 修正了 safety_settings 参数中的一个致命的语法错误。
-#       将未加引号的键 HARM_CATEGORY_HARASSMENT 修改为正确的字符串 "HARM_CATEGORY_HARASSMENT"，
-#       解决了导致程序崩溃并返回500错误的根本原因。同时保留了强化的CORS配置。
+# 版本: 12.9 - 最终稳健版 (Final Robust Version)
+# 描述: 将 PROMPT_TEMPLATE 的定义方式从三引号多行字符串改为更稳健的
+#       多行字符串拼接方式，以彻底避免因复制粘贴可能引入的语法错误。
 # -----------------------------------------------------------------------------
 
 import os
@@ -18,10 +17,10 @@ from flask_cors import CORS
 from bs4 import BeautifulSoup
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+import traceback
 
 # --- 1. 初始化和配置 ---
 app = Flask(__name__)
-# 使用强化的CORS配置以确保浏览器的pre-flight请求能被正确处理
 CORS(app, resources={r"/analyze": {"origins": "*"}})
 
 limiter = Limiter(
@@ -48,16 +47,14 @@ def extract_entities_with_ai(text_blob):
     print("🤖 启动AI实体提取程序...")
     try:
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = f"""
-        From the following job description or text, please extract the company name and the job title.
-        Provide the output as a JSON object with two keys: "company_name" and "job_title".
-        If you cannot find a specific job title, set its value to an empty string "".
-
-        Text:
-        ---
-        {text_blob}
-        ---
-        """
+        prompt = (
+            'From the following job description or text, please extract the company name and the job title.\n'
+            'Provide the output as a JSON object with two keys: "company_name" and "job_title".\n'
+            'If you cannot find a specific job title, set its value to an empty string "".\n\n'
+            'Text:\n---\n'
+            f'{text_blob}\n'
+            '---\n'
+        )
         generation_config = genai.GenerationConfig(response_mime_type="application/json")
         response = model.generate_content(prompt, generation_config=generation_config)
         
@@ -76,7 +73,6 @@ def extract_entities_with_ai(text_blob):
     except Exception as e:
         print(f"❌ AI实体提取失败: {e}. 将使用原始文本进行搜索。")
         return text_blob, ""
-
 
 # --- 4. 辅助函数：执行Google搜索 ---
 def perform_google_search(query, api_key, cse_id, num_results=4):
@@ -115,60 +111,60 @@ def scrape_website_for_text(url):
         print(f"❌ 爬取或解析网站时发生错误: {e}")
         return None
 
-# --- 6. 核心AI指令 (Prompt) ---
-PROMPT_TEMPLATE = """
-As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report.
-**Crucially, you must generate the entire response strictly as a JSON object and in {output_language}.**
-**Citation Rules (VERY IMPORTANT):**
-1. The information provided below is structured with a unique `[Source ID: X]`.
-2. When you use information from a source, you **MUST** embed its corresponding ID tag (e.g., `[1]`, `[2]`) directly into the text where the information is used.
-3. In the final JSON, include a `cited_ids` array containing all unique source IDs you used in the report.
-**Information Provided:**
-1. **Company & Role:** {company_name} - {job_title}
-2. **User-Selected Aspects of Interest:** {aspects_list}
-3. **Applicant's Resume/Bio (if provided):**
-   ```
-   {resume_text}
-   ```
-4. **Research Data (Search results and website content):**
-   ```
-   {context_with_sources}
-   ```
-**Your Task:**
-Synthesize all the information to create a comprehensive report. The output **MUST** be a single JSON object with the following structure. Populate each text field based on your analysis.
-```json
-{{
-  "report": {{
-    "red_flag_status": "Your assessment (e.g., 'Low Risk', 'Medium Risk'). Include an emoji.",
-    "red_flag_text": "Detailed explanation for the red flag assessment. Embed citation tags like [1][2].",
-    "hiring_experience_text": "Analysis of the hiring process and candidate experience. Focus on communication and ghosting patterns. Embed citation tags like [3][4]. If no info is found, provide a default explanatory text.",
-    "culture_fit": {{
-      "reputation": "Analysis of company reputation. Embed citation tags.",
-      "management": "Analysis of management style. Embed citation tags.",
-      "sustainability": "Analysis of sustainability practices. Embed citation tags.",
-      "wlb": "Analysis of work-life balance. Embed citation tags.",
-      "growth": "Analysis of growth opportunities. Embed citation tags.",
-      "salary": "Analysis of salary and benefits. Embed citation tags.",
-      "overtime": "Analysis of overtime culture. Embed citation tags."
-    }},
-    "value_match_score": "A number between 0 and 100 representing the match score. Provide 0 if no resume is given.",
-    "value_match_text": "Detailed explanation of the match score based on the resume. Embed citation tags. If no resume, state it's unavailable.",
-    "final_risk_rating": "Your final risk rating (e.g., 'Low-to-Medium Risk').",
-    "final_risk_text": "A summary justifying the final risk rating, considering all factors. Embed citation tags."
-  }},
-  "cited_ids": [1, 2, 3, 4, ...]
-}}
-```
+# --- 6. 核心AI指令 (Prompt) [已重构为更稳健的格式] ---
+PROMPT_TEMPLATE = (
+    "As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report.\n"
+    "**Crucially, you must generate the entire response strictly as a JSON object and in {output_language}.**\n"
+    "**Citation Rules (VERY IMPORTANT):**\n"
+    "1. The information provided below is structured with a unique `[Source ID: X]`.\n"
+    "2. When you use information from a source, you **MUST** embed its corresponding ID tag (e.g., `[1]`, `[2]`) directly into the text where the information is used.\n"
+    "3. In the final JSON, include a `cited_ids` array containing all unique source IDs you used in the report.\n"
+    "**Information Provided:**\n"
+    "1. **Company & Role:** {company_name} - {job_title}\n"
+    "2. **User-Selected Aspects of Interest:** {aspects_list}\n"
+    "3. **Applicant's Resume/Bio (if provided):**\n"
+    "   ```\n"
+    "   {resume_text}\n"
+    "   ```\n"
+    "4. **Research Data (Search results and website content):**\n"
+    "   ```\n"
+    "   {context_with_sources}\n"
+    "   ```\n"
+    "**Your Task:**\n"
+    "Synthesize all the information to create a comprehensive report. The output **MUST** be a single JSON object with the following structure. Populate each text field based on your analysis.\n"
+    "```json\n"
+    "{{\n"
+    '  "report": {{\n'
+    '    "red_flag_status": "Your assessment (e.g., \'Low Risk\', \'Medium Risk\'). Include an emoji.",\n'
+    '    "red_flag_text": "Detailed explanation for the red flag assessment. Embed citation tags like [1][2].",\n'
+    '    "hiring_experience_text": "Analysis of the hiring process and candidate experience. Focus on communication and ghosting patterns. Embed citation tags like [3][4]. If no info is found, provide a default explanatory text.",\n'
+    '    "culture_fit": {{\n'
+    '      "reputation": "Analysis of company reputation. Embed citation tags.",\n'
+    '      "management": "Analysis of management style. Embed citation tags.",\n'
+    '      "sustainability": "Analysis of sustainability practices. Embed citation tags.",\n'
+    '      "wlb": "Analysis of work-life balance. Embed citation tags.",\n'
+    '      "growth": "Analysis of growth opportunities. Embed citation tags.",\n'
+    '      "salary": "Analysis of salary and benefits. Embed citation tags.",\n'
+    '      "overtime": "Analysis of overtime culture. Embed citation tags."\n'
+    '    }},\n'
+    '    "value_match_score": "A number between 0 and 100 representing the match score. Provide 0 if no resume is given.",\n'
+    '    "value_match_text": "Detailed explanation of the match score based on the resume. Embed citation tags. If no resume, state it\'s unavailable.",\n'
+    '    "final_risk_rating": "Your final risk rating (e.g., \'Low-to-Medium Risk\').",\n'
+    '    "final_risk_text": "A summary justifying the final risk rating, considering all factors. Embed citation tags."\n'
+    '  }},\n'
+    '  "cited_ids": [1, 2, 3, 4, ...]\n'
+    "}}\n"
+    "```"
+)
 
 # --- 7. API路由 ---
-@app.route('/analyze', methods=['POST', 'OPTIONS']) # 明确地允许OPTIONS方法
+@app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
-    # 对OPTIONS请求直接返回成功响应
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'}), 200
         
-    print("--- v12.8 Final Fix Analysis request received! ---")
+    print("--- v12.9 Robust Version Analysis request received! ---")
     try:
         data = request.get_json()
         if data is None:
@@ -243,19 +239,12 @@ def analyze_company_text():
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
         generation_config = genai.GenerationConfig(response_mime_type="application/json")
         
-        # --- 核心修正：将 HARM_CATEGORY_HARASSMENT 加上引号，使其成为合法的字符串键 ---
         safety_settings = {
-            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
-            "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
-            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
-            "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE", "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE", "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
         }
         
-        response = model.generate_content(
-            full_prompt, 
-            generation_config=generation_config, 
-            safety_settings=safety_settings
-        )
+        response = model.generate_content(full_prompt, generation_config=generation_config, safety_settings=safety_settings)
         
         if not response.parts:
             print("!!! 主报告生成被阻止或为空 !!!")
@@ -285,7 +274,6 @@ def analyze_company_text():
         return jsonify({"report": report_data, "sources": final_sources})
 
     except Exception as e:
-        import traceback
         print(f"!!! 发生未知错误: {e} !!!")
         print(traceback.format_exc())
         return jsonify({"error": "An internal server error occurred."}), 500
