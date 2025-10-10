@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 12.6 - 最终语法修正 (Final Syntax Fix)
-# 描述: 修正了safety_settings参数中的一个致命的语法错误。
-#       将未加引号的键 HARM_CATEGORY_HARASSMENT 修改为正确的字符串 "HARM_CATEGORY_HARASSMENT"，
-#       解决了导致程序崩溃并返回500错误的根本原因。
+# 版本: 12.7 - CORS 强化版
+# 描述: 为了解决潜在的浏览器与服务器连接问题，将 Flask-CORS 的配置
+#       修改为更明确的、针对特定路由的配置，以增强在云环境下的稳定性。
 # -----------------------------------------------------------------------------
 
 import os
@@ -19,9 +18,11 @@ from bs4 import BeautifulSoup
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-# --- 1. 初始化和配置 (无变化) ---
+# --- 1. 初始化和配置 (已修改) ---
 app = Flask(__name__)
-CORS(app)
+# 【修正】让CORS配置更明确，以应对可能的浏览器pre-flight请求问题。
+# 这会精确地告诉浏览器，对于/analyze这个路径，允许来自任何源(*)的请求。
+CORS(app, resources={r"/analyze": {"origins": "*"}})
 
 limiter = Limiter(
     get_remote_address,
@@ -159,11 +160,11 @@ Synthesize all the information to create a comprehensive report. The output **MU
 }}
 ```
 
-# --- 7. API路由 (已修正) ---
+# --- 7. API路由 (无变化) ---
 @app.route('/analyze', methods=['POST'])
 @limiter.limit("5 per day")
 def analyze_company_text():
-    print("--- v12.6 Final Syntax Fix Analysis request received! ---")
+    print("--- v12.7 CORS Hardening Analysis request received! ---")
     try:
         data = request.get_json()
         smart_paste_content = data.get('companyName') 
@@ -235,7 +236,6 @@ def analyze_company_text():
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
         generation_config = genai.GenerationConfig(response_mime_type="application/json")
         
-        # --- 核心修正：将 HARM_CATEGORY_HARASSMENT 加上引号，使其成为合法的字符串键 ---
         safety_settings = {"HARM_CATEGORY_HARASSMENT": "BLOCK_NONE"}
         response = model.generate_content(full_prompt, generation_config=generation_config, safety_settings=safety_settings)
         
@@ -281,4 +281,3 @@ def ratelimit_handler(e):
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
-
