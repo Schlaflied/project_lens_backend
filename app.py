@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 15.0 - 最终确认版 (Final Confirmed Version)
-# 描述: 根据用户 API 密钥的可用模型列表，将调用的 Gemini 模型
-#       更新为已确认可用的、最强大的稳定版 "gemini-2.5-pro"，
-#       从根源上彻底解决所有 "model not found" 错误。
+# 版本: 15.1 - 引用修正版 (Citation Fix Version)
+# 描述: 增加了一个强大的双重保险机制。不再信任 AI 生成的 `cited_ids` 列表，
+#       而是通过正则表达式主动从 AI 生成的所有报告文本中提取 [数字] 标记，
+#       确保所有在文本中出现的引用都会被正确地展示在最终的来源列表中。
 # -----------------------------------------------------------------------------
 
 import os
@@ -159,14 +159,27 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-# --- 7. API路由 [已更新为最终确认的模型] ---
+
+# --- 新增辅助函数：从文本中提取所有引用ID ---
+def extract_cited_ids_from_report(report_data):
+    """
+    遍历报告数据的所有文本字段，用正则表达式提取所有 [数字] 形式的引用标记。
+    """
+    all_text = json.dumps(report_data)
+    # 使用正则表达式查找所有 '[数字]' 格式的字符串
+    found_ids = re.findall(r'\[(\d+)\]', all_text)
+    # 将找到的字符串数字转换为整数，并用 set 去除重复项，然后排序
+    unique_ids = sorted(list(set(int(id_str) for id_str in found_ids)))
+    return unique_ids
+
+# --- 7. API路由 [已更新] ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'}), 200
         
-    print("--- v15.0 Final Confirmed Version Analysis request received! ---")
+    print("--- v15.1 Citation Fix Version Analysis request received! ---")
     try:
         data = request.get_json()
         if data is None:
@@ -260,7 +273,11 @@ def analyze_company_text():
         try:
             ai_json_response = json.loads(response.text)
             report_data = ai_json_response.get("report", {})
-            cited_ids = ai_json_response.get("cited_ids", [])
+            
+            # --- 【核心修正】不再信任AI的cited_ids，而是自己从文本中提取 ---
+            cited_ids = extract_cited_ids_from_report(report_data)
+            print(f"✅ 双重保险：从报告文本中成功提取了 {len(cited_ids)} 个唯一引用: {cited_ids}")
+
         except json.JSONDecodeError:
             print("!!! Gemini 没有返回有效的 JSON !!!")
             print(f"--- 接收到的文本: {response.text[:500]}... ---")
@@ -292,4 +309,3 @@ def ratelimit_handler(e):
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
-
