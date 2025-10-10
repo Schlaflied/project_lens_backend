@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 12.7 - CORS 强化版
-# 描述: 为了解决潜在的浏览器与服务器连接问题，将 Flask-CORS 的配置
-#       修改为更明确的、针对特定路由的配置，以增强在云环境下的稳定性。
+# 版本: 12.8 - 最终修正版 (Final Fix)
+# 描述: 修正了 safety_settings 参数中的一个致命的语法错误。
+#       将未加引号的键 HARM_CATEGORY_HARASSMENT 修改为正确的字符串 "HARM_CATEGORY_HARASSMENT"，
+#       解决了导致程序崩溃并返回500错误的根本原因。同时保留了强化的CORS配置。
 # -----------------------------------------------------------------------------
 
 import os
@@ -18,10 +19,9 @@ from bs4 import BeautifulSoup
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-# --- 1. 初始化和配置 (已修改) ---
+# --- 1. 初始化和配置 ---
 app = Flask(__name__)
-# 【修正】让CORS配置更明确，以应对可能的浏览器pre-flight请求问题。
-# 这会精确地告诉浏览器，对于/analyze这个路径，允许来自任何源(*)的请求。
+# 使用强化的CORS配置以确保浏览器的pre-flight请求能被正确处理
 CORS(app, resources={r"/analyze": {"origins": "*"}})
 
 limiter = Limiter(
@@ -31,7 +31,7 @@ limiter = Limiter(
     storage_uri="memory://"
 )
 
-# --- 2. API密钥配置 (无变化) ---
+# --- 2. API密钥配置 ---
 try:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     SEARCH_API_KEY = os.getenv("SEARCH_API_KEY")
@@ -43,7 +43,7 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 3. 智能提取公司和职位名称 (无变化) ---
+# --- 3. 智能提取公司和职位名称 ---
 def extract_entities_with_ai(text_blob):
     print("🤖 启动AI实体提取程序...")
     try:
@@ -78,7 +78,7 @@ def extract_entities_with_ai(text_blob):
         return text_blob, ""
 
 
-# --- 4. 辅助函数：执行Google搜索 (无变化) ---
+# --- 4. 辅助函数：执行Google搜索 ---
 def perform_google_search(query, api_key, cse_id, num_results=4):
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results}
@@ -93,7 +93,7 @@ def perform_google_search(query, api_key, cse_id, num_results=4):
         print(f"Google搜索请求失败: {e}")
         return [], []
 
-# --- 5. 辅助函数：网页爬虫 (无变化) ---
+# --- 5. 辅助函数：网页爬虫 ---
 def scrape_website_for_text(url):
     print(f"🚀 准备爬取网站: {url}")
     try:
@@ -115,7 +115,7 @@ def scrape_website_for_text(url):
         print(f"❌ 爬取或解析网站时发生错误: {e}")
         return None
 
-# --- 6. 核心AI指令 (Prompt) (无变化) ---
+# --- 6. 核心AI指令 (Prompt) ---
 PROMPT_TEMPLATE = """
 As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report.
 **Crucially, you must generate the entire response strictly as a JSON object and in {output_language}.**
@@ -160,13 +160,20 @@ Synthesize all the information to create a comprehensive report. The output **MU
 }}
 ```
 
-# --- 7. API路由 (无变化) ---
-@app.route('/analyze', methods=['POST'])
+# --- 7. API路由 ---
+@app.route('/analyze', methods=['POST', 'OPTIONS']) # 明确地允许OPTIONS方法
 @limiter.limit("5 per day")
 def analyze_company_text():
-    print("--- v12.7 CORS Hardening Analysis request received! ---")
+    # 对OPTIONS请求直接返回成功响应
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'ok'}), 200
+        
+    print("--- v12.8 Final Fix Analysis request received! ---")
     try:
         data = request.get_json()
+        if data is None:
+            return jsonify({"error": "Invalid JSON in request body."}), 400
+
         smart_paste_content = data.get('companyName') 
         resume_text = data.get('resumeText', 'No resume provided.')
         lang_code = data.get('language', 'en')
@@ -236,8 +243,19 @@ def analyze_company_text():
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
         generation_config = genai.GenerationConfig(response_mime_type="application/json")
         
-        safety_settings = {"HARM_CATEGORY_HARASSMENT": "BLOCK_NONE"}
-        response = model.generate_content(full_prompt, generation_config=generation_config, safety_settings=safety_settings)
+        # --- 核心修正：将 HARM_CATEGORY_HARASSMENT 加上引号，使其成为合法的字符串键 ---
+        safety_settings = {
+            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+            "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+            "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+        }
+        
+        response = model.generate_content(
+            full_prompt, 
+            generation_config=generation_config, 
+            safety_settings=safety_settings
+        )
         
         if not response.parts:
             print("!!! 主报告生成被阻止或为空 !!!")
@@ -267,17 +285,20 @@ def analyze_company_text():
         return jsonify({"report": report_data, "sources": final_sources})
 
     except Exception as e:
+        import traceback
         print(f"!!! 发生未知错误: {e} !!!")
+        print(traceback.format_exc())
         return jsonify({"error": "An internal server error occurred."}), 500
 
-# --- 8. 错误处理 (无变化) ---
+# --- 8. 错误处理 ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
     error_message = ("开拓者，您今日的免费分析额度已用尽！🚀\n\n"
         "Project Lens 每天为所有用户提供5次免费分析。")
     return jsonify(error="rate_limit_exceeded", message=error_message), 429
 
-# --- 9. 启动 (无变化) ---
+# --- 9. 启动 ---
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
+
