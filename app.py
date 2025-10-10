@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 13.0 - 模型更新版 (Model Update Version)
-# 描述: 根据日志报错信息，将调用的 Gemini 模型从不被识别的 "gemini-1.5-flash-latest"
-#       更新为官方推荐的、更稳定强大的 "gemini-1.5-pro-latest"，
-#       从根本上解决模型 "not found" 的 404 错误。
+# 版本: 14.0 - 最终兼容版 (Final Compatible Version)
+# 描述: 根据最新的日志报错和模型兼容性调查，将调用的 Gemini 模型
+#       更新为兼容性最强的 "gemini-pro"，以彻底解决 v1beta 接口下
+#       找不到模型的 404 错误。
 # -----------------------------------------------------------------------------
 
 import os
@@ -43,12 +43,12 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 3. 智能提取公司和职位名称 [已更新模型] ---
+# --- 3. 智能提取公司和职位名称 [已更新为最兼容的模型] ---
 def extract_entities_with_ai(text_blob):
-    print("🤖 启动AI实体提取程序 (使用 gemini-1.5-pro)...")
+    print("🤖 启动AI实体提取程序 (使用 gemini-pro)...")
     try:
-        # 【核心修正】更新为官方推荐的稳定模型
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        # 【核心修正】更新为兼容性最强的稳定模型
+        model = genai.GenerativeModel('gemini-pro')
         prompt = (
             'From the following job description or text, please extract the company name and the job title.\n'
             'Provide the output as a JSON object with two keys: "company_name" and "job_title".\n'
@@ -57,15 +57,30 @@ def extract_entities_with_ai(text_blob):
             f'{text_blob}\n'
             '---\n'
         )
-        generation_config = genai.GenerationConfig(response_mime_type="application/json")
-        response = model.generate_content(prompt, generation_config=generation_config)
+        # 对于 gemini-pro, 强制要求返回 JSON 可能不稳定，先用 text 然后再解析
+        # generation_config = genai.GenerationConfig(response_mime_type="application/json")
+        response = model.generate_content(prompt) #, generation_config=generation_config)
         
         if not response.parts:
             print("--- 实体提取AI响应被阻止 ---")
             print(f"--- Prompt Feedback: {response.prompt_feedback} ---")
             return text_blob, ""
+        
+        # 从纯文本响应中提取JSON
+        raw_text = response.text
+        json_match = re.search(r'```json\n({.*?})\n```', raw_text, re.DOTALL)
+        if not json_match:
+             json_match = re.search(r'({.*?})', raw_text, re.DOTALL)
 
-        entities = json.loads(response.text)
+        if json_match:
+            json_str = json_match.group(1)
+            entities = json.loads(json_str)
+        else:
+            # 如果没有找到JSON，做一个最后的尝试
+             print(f"--- 未能从AI响应中直接提取JSON，尝试直接解析: {raw_text[:200]}... ---")
+             entities = json.loads(raw_text)
+
+
         company = entities.get("company_name", "")
         job_title = entities.get("job_title", "")
         
@@ -116,7 +131,7 @@ def scrape_website_for_text(url):
 # --- 6. 核心AI指令 (Prompt) ---
 PROMPT_TEMPLATE = (
     "As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report.\n"
-    "**Crucially, you must generate the entire response strictly as a JSON object and in {output_language}.**\n"
+    "**Crucially, you must generate the entire response strictly as a single JSON object and nothing else, wrapped in ```json and ```. The language of the content inside JSON should be {output_language}.**\n"
     "**Citation Rules (VERY IMPORTANT):**\n"
     "1. The information provided below is structured with a unique `[Source ID: X]`.\n"
     "2. When you use information from a source, you **MUST** embed its corresponding ID tag (e.g., `[1]`, `[2]`) directly into the text where the information is used.\n"
@@ -159,14 +174,14 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-# --- 7. API路由 [已更新模型] ---
+# --- 7. API路由 [已更新为最兼容的模型] ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'}), 200
         
-    print("--- v13.0 Model Update Analysis request received! ---")
+    print("--- v14.0 Final Compatible Version Analysis request received! ---")
     try:
         data = request.get_json()
         if data is None:
@@ -238,16 +253,16 @@ def analyze_company_text():
             context_with_sources=context_with_sources
         )
         
-        # 【核心修正】更新为官方推荐的稳定模型
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
-        generation_config = genai.GenerationConfig(response_mime_type="application/json")
+        # 【核心修正】更新为兼容性最强的稳定模型
+        model = genai.GenerativeModel('gemini-pro')
+        # generation_config = genai.GenerationConfig(response_mime_type="application/json") # 移除对 gemini-pro 可能不兼容的强制 JSON
         
         safety_settings = {
             "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE", "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
             "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE", "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
         }
         
-        response = model.generate_content(full_prompt, generation_config=generation_config, safety_settings=safety_settings)
+        response = model.generate_content(full_prompt, safety_settings=safety_settings) # 移除 generation_config
         
         if not response.parts:
             print("!!! 主报告生成被阻止或为空 !!!")
@@ -258,7 +273,19 @@ def analyze_company_text():
             return jsonify({"error": "AI response was blocked, possibly due to safety filters on the searched content."}), 500
 
         try:
-            ai_json_response = json.loads(response.text)
+            # 从纯文本响应中提取JSON
+            raw_text = response.text
+            json_match = re.search(r'```json\n({.*?})\n```', raw_text, re.DOTALL)
+            if not json_match:
+                 json_match = re.search(r'({.*?})', raw_text, re.DOTALL)
+            
+            if json_match:
+                json_str = json_match.group(1)
+                ai_json_response = json.loads(json_str)
+            else:
+                print(f"--- 未能从AI响应中直接提取JSON，尝试直接解析: {raw_text[:200]}... ---")
+                ai_json_response = json.loads(raw_text)
+
             report_data = ai_json_response.get("report", {})
             cited_ids = ai_json_response.get("cited_ids", [])
         except json.JSONDecodeError:
