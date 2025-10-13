@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 21.0 - 引用双重验证版 (Citation Double-Check Version)
-# 描述: 1. (已实现) 完整的引用防幻觉机制。
-#       2. (本次更新) 引入终极“双重验证”机制。不再信任AI生成的`cited_ids`列表，
-#          而是通过正则表达式主动从AI返回的报告文本中提取所有实际出现的引用角标。
-#          这确保了最终发送给前端的来源列表与报告中可点击的角标完全一致，
-#          彻底解决了因AI“省略”密集引用而导致的角标无法点击问题。
+# 版本: 22.0 - 幻觉净化版 (Hallucination Scrubber Version)
+# 描述: 1. (已实现) 完整的引用防幻觉与双重验证机制。
+#       2. (本次更新) 引入终极“上下文净化”机制。在收到AI报告后，后端会：
+#          a. 提取AI文本中所有提及的引用ID。
+#          b. 将这些ID与我们提供给AI的原始来源进行比对，找出有效的ID。
+#          c. 遍历AI生成的报告文本，将所有无效的（幻觉出的）引用角标直接删除。
+#          d. 只将清理过的报告和完全匹配的有效来源发送给前端，从根源杜绝问题。
 # -----------------------------------------------------------------------------
 
 import os
@@ -111,15 +112,29 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-# --- 7. 提取引用ID [已升级为双重验证的核心] ---
-def extract_cited_ids_from_report_text(report_data):
-    """
-    遍历报告数据的所有文本字段，用正则表达式提取所有实际出现的 [数字] 形式的引用标记。
-    这是最终的、最可靠的引用ID来源。
-    """
+# --- 7. 引用净化辅助函数 [新增] ---
+def extract_all_mentioned_ids(report_data):
+    """遍历报告的所有文本字段，提取所有 [数字] 形式的引用标记。"""
     all_text = json.dumps(report_data)
     found_ids = re.findall(r'\[(\d+)\]', all_text)
-    return sorted(list(set(int(id_str) for id_str in found_ids)))
+    return set(int(id_str) for id_str in found_ids)
+
+def scrub_invalid_citations(data, valid_ids_set):
+    """
+    递归遍历数据结构，从字符串中移除所有无效的引用角标 [n]。
+    一个引用角标是无效的，如果它的ID不在 valid_ids_set 中。
+    """
+    if isinstance(data, dict):
+        return {k: scrub_invalid_citations(v, valid_ids_set) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [scrub_invalid_citations(elem, valid_ids_set) for elem in data]
+    elif isinstance(data, str):
+        def repl(match):
+            citation_id = int(match.group(1))
+            return match.group(0) if citation_id in valid_ids_set else ""
+        return re.sub(r'\[(\d+)\]', repl, data)
+    else:
+        return data
 
 # --- 8. API路由 [已升级] ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
@@ -127,7 +142,7 @@ def extract_cited_ids_from_report_text(report_data):
 def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
         
-    print("--- v21.0 Double-Check Version Analysis request received! ---")
+    print("--- v22.0 Hallucination Scrubber Version Analysis request received! ---")
     try:
         data = request.get_json();
         if not data: return jsonify({"error": "Invalid JSON"}), 400
@@ -186,16 +201,26 @@ def analyze_company_text():
             ai_json_response = json.loads(response.text)
             report_data = ai_json_response.get("report", {})
             
-            # --- 【核心升级】终极双重验证：从报告文本中重新提取所有真实存在的引用ID ---
-            truly_cited_ids = extract_cited_ids_from_report_text(report_data)
-            print(f"✅ 双重验证成功: 从报告文本中提取了 {len(truly_cited_ids)} 个真实存在的引用: {truly_cited_ids}")
+            # --- 【核心升级】终极“幻觉净化”流程 ---
+            # 1. 从AI生成的文本中，提取它提到的所有引用ID。
+            all_mentioned_ids = extract_all_mentioned_ids(report_data)
+            
+            # 2. 找出真正有效的ID（即AI提到的，并且我们确实提供过的）。
+            valid_ids_set = all_mentioned_ids.intersection(source_map.keys())
+            print(f"✅ 验证完成: AI提及 {len(all_mentioned_ids)}个引用, 其中 {len(valid_ids_set)}个是有效的: {sorted(list(valid_ids_set))}")
+
+            # 3. 清理报告：从报告文本中移除所有无效的（幻觉出来的）引用角标。
+            scrubbed_report_data = scrub_invalid_citations(report_data, valid_ids_set)
+            print("✅ 报告清理完成: 已移除所有幻觉出的引用角标。")
 
         except json.JSONDecodeError:
             print(f"!!! Gemini 返回了无效的 JSON: {response.text[:500]}... !!!"); return jsonify({"error": "AI failed to generate valid report."}), 500
 
-        # 【核心升级】只发送那些在文本中真正被引用了的来源
-        final_sources = [ {**source_map[sid], 'id': sid} for sid in truly_cited_ids if sid in source_map ]
-        return jsonify({"company_name": company_name, "report": report_data, "sources": final_sources})
+        # 4. 只发送那些在清理后报告中依然存在的、有效的来源信息。
+        final_sources = [ {**source_map[sid], 'id': sid} for sid in sorted(list(valid_ids_set)) if sid in source_map ]
+
+        # 5. 返回被彻底清理过的报告和完全匹配的来源列表。
+        return jsonify({"company_name": company_name, "report": scrubbed_report_data, "sources": final_sources})
 
     except Exception as e:
         print(f"!!! 发生未知错误: {e} !!!"); print(traceback.format_exc()); return jsonify({"error": "Internal server error."}), 500
