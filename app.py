@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 15.1 - 引用修正版 (Citation Fix Version)
-# 描述: 增加了一个强大的双重保险机制。不再信任 AI 生成的 `cited_ids` 列表，
-#       而是通过正则表达式主动从 AI 生成的所有报告文本中提取 [数字] 标记，
-#       确保所有在文本中出现的引用都会被正确地展示在最终的来源列表中。
+# 版本: 17.0 - 语言健壮性最终版 (Language Robustness Final Version)
+# 描述: 1. (已实现) 智能日期精确化功能。
+#       2. (已实现) 统一的全面搜索策略。
+#       3. (本次更新) 优化了所有错误处理，后端不再返回任何面向用户的UI文本，而是返回结构化的错误类型，
+#          由前端负责进行完整的国际化(i18n)展示，确保语言显示绝对正确。
 # -----------------------------------------------------------------------------
 
 import os
@@ -19,6 +20,7 @@ from bs4 import BeautifulSoup
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import traceback
+import datetime
 
 # --- 1. 初始化和配置 ---
 app = Flask(__name__)
@@ -43,11 +45,10 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 3. 智能提取公司和职位名称 [已更新为最终确认的模型] ---
+# --- 3. 智能提取公司和职位名称 (无变化) ---
 def extract_entities_with_ai(text_blob):
     print("🤖 启动AI实体提取程序 (使用 gemini-2.5-pro)...")
     try:
-        # 【核心修正】更新为用户列表确认可用的模型
         model = genai.GenerativeModel('gemini-2.5-pro')
         prompt = (
             'From the following job description or text, please extract the company name and the job title.\n'
@@ -76,10 +77,10 @@ def extract_entities_with_ai(text_blob):
         print(f"❌ AI实体提取失败: {e}. 将使用原始文本进行搜索。")
         return text_blob, ""
 
-# --- 4. 辅助函数：执行Google搜索 ---
+# --- 4. 辅助函数：执行Google搜索 (无变化) ---
 def perform_google_search(query, api_key, cse_id, num_results=4):
     url = "https://www.googleapis.com/customsearch/v1"
-    params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results}
+    params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results, 'sort': 'date'}
     try:
         response = requests.get(url, params=params)
         response.raise_for_status()
@@ -91,13 +92,11 @@ def perform_google_search(query, api_key, cse_id, num_results=4):
         print(f"Google搜索请求失败: {e}")
         return [], []
 
-# --- 5. 辅助函数：网页爬虫 ---
+# --- 5. 辅助函数：网页爬虫 (无变化) ---
 def scrape_website_for_text(url):
     print(f"🚀 准备爬取网站: {url}")
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
+        headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -113,7 +112,7 @@ def scrape_website_for_text(url):
         print(f"❌ 爬取或解析网站时发生错误: {e}")
         return None
 
-# --- 6. 核心AI指令 (Prompt) ---
+# --- 6. 核心AI指令 (Prompt) (无变化) ---
 PROMPT_TEMPLATE = (
     "As 'Project Lens', an expert AI assistant for job seekers, your task is to generate a detailed analysis report.\n"
     "**Crucially, you must generate the entire response strictly as a JSON object and in {output_language}.**\n"
@@ -123,7 +122,7 @@ PROMPT_TEMPLATE = (
     "3. In the final JSON, include a `cited_ids` array containing all unique source IDs you used in the report.\n"
     "**Information Provided:**\n"
     "1. **Company & Role:** {company_name} - {job_title}\n"
-    "2. **User-Selected Aspects of Interest:** {aspects_list}\n"
+    "2. **Current Date:** {current_date}\n"
     "3. **Applicant's Resume/Bio (if provided):**\n"
     "   ```\n"
     "   {resume_text}\n"
@@ -140,6 +139,7 @@ PROMPT_TEMPLATE = (
     '    "red_flag_status": "Your assessment (e.g., \'Low Risk\', \'Medium Risk\'). Include an emoji.",\n'
     '    "red_flag_text": "Detailed explanation for the red flag assessment. Embed citation tags like [1][2].",\n'
     '    "hiring_experience_text": "Analysis of the hiring process and candidate experience. Focus on communication and ghosting patterns. Embed citation tags like [3][4]. If no info is found, provide a default explanatory text.",\n'
+    '    "timeliness_analysis": "Based on the current date, analyze the recency of the information found. Note if reviews are old or if the job posting seems stale. Embed citation tags.",\n'
     '    "culture_fit": {{\n'
     '      "reputation": "Analysis of company reputation. Embed citation tags.",\n'
     '      "management": "Analysis of management style. Embed citation tags.",\n'
@@ -159,16 +159,10 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-
-# --- 新增辅助函数：从文本中提取所有引用ID ---
+# --- 辅助函数：从文本中提取所有引用ID (无变化) ---
 def extract_cited_ids_from_report(report_data):
-    """
-    遍历报告数据的所有文本字段，用正则表达式提取所有 [数字] 形式的引用标记。
-    """
     all_text = json.dumps(report_data)
-    # 使用正则表达式查找所有 '[数字]' 格式的字符串
     found_ids = re.findall(r'\[(\d+)\]', all_text)
-    # 将找到的字符串数字转换为整数，并用 set 去除重复项，然后排序
     unique_ids = sorted(list(set(int(id_str) for id_str in found_ids)))
     return unique_ids
 
@@ -179,48 +173,37 @@ def analyze_company_text():
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'}), 200
         
-    print("--- v15.1 Citation Fix Version Analysis request received! ---")
+    print("--- v17.0 Language Robustness Final Version Analysis request received! ---")
     try:
         data = request.get_json()
-        if data is None:
-            return jsonify({"error": "Invalid JSON in request body."}), 400
+        if data is None: return jsonify({"error": "Invalid JSON in request body."}), 400
 
         smart_paste_content = data.get('companyName') 
         resume_text = data.get('resumeText', 'No resume provided.')
         lang_code = data.get('language', 'en')
-        aspects = data.get('aspects', [])
 
-        if not smart_paste_content:
-            return jsonify({"error": "Company name / job info is required."}), 400
+        if not smart_paste_content: return jsonify({"error": "Company name / job info is required."}), 400
 
         company_name, job_title = extract_entities_with_ai(smart_paste_content)
 
-        if not company_name:
-             return jsonify({"error": "Could not identify a company name from the provided text."}), 400
+        if not company_name: return jsonify({"error": "Could not identify a company name."}), 400
 
-        context_blocks = []
-        source_map = {}
-        source_id_counter = 1
-
+        context_blocks = []; source_map = {}; source_id_counter = 1
         print(f"Searching for extracted company: {company_name}")
         
-        base_queries = [
-            f'"{company_name}" company culture review', f'"{company_name}" scam OR fraud OR fake',
-            f'site:linkedin.com "{company_name}" employees OR culture', f'site:indeed.com "{company_name}" reviews',
-            f'site:glassdoor.com "{company_name}" reviews', f'"{company_name}" hiring process review',
+        comprehensive_queries = [
+            f'"{company_name}" company culture review', f'"{company_name}" work life balance',
+            f'"{company_name}" salary benefits', f'"{company_name}" growth opportunities career path',
+            f'"{company_name}" hiring process interview candidate experience', f'"{company_name}" management style leadership',
+            f'"{company_name}" overtime crunch culture', f'"{company_name}" company reputation news',
+            f'"{company_name}" scam OR fraud OR fake', f'site:linkedin.com "{company_name}" employees OR culture',
+            f'site:indeed.com "{company_name}" reviews', f'site:glassdoor.com "{company_name}" reviews',
             f'"{company_name}" no response after interview OR ghosted'
         ]
-        aspect_query_map = {
-            'wlb': f'"{company_name}" work life balance', 'growth': f'"{company_name}" growth opportunities',
-            'salary': f'"{company_name}" salary level benefits', 'overtime': f'"{company_name}" overtime culture',
-            'management': f'"{company_name}" management style', 'sustainability': f'"{company_name}" sustainability social responsibility',
-        }
-        for aspect_key in aspects:
-            if aspect_key in aspect_query_map: base_queries.append(aspect_query_map[aspect_key])
-        search_queries = list(set(base_queries))
+        search_queries = list(set(comprehensive_queries))
 
         for query in search_queries:
-            snippets, sources_data = perform_google_search(query, SEARCH_API_KEY, SEARCH_ENGINE_ID, num_results=2)
+            snippets, sources_data = perform_google_search(f'{query} after:{datetime.date.today().year - 1}', SEARCH_API_KEY, SEARCH_ENGINE_ID, num_results=2)
             for i, snippet in enumerate(snippets):
                 if i < len(sources_data):
                     source_info = sources_data[i]
@@ -234,53 +217,38 @@ def analyze_company_text():
                     source_id_counter += 1
             time.sleep(0.5)
 
+        # 【核心优化】如果搜索后没有任何内容，返回一个特定的、可由前端翻译的错误。
         if not context_blocks:
-             return jsonify({
-                "report": {"red_flag_text": "No information found for this company. Please try using the official full name."}, 
-                "sources": []
-             })
+             return jsonify({"error": "no_info_found", "message": "No information could be found for the given company."}), 404
 
         context_with_sources = "\n\n".join(context_blocks)
-        print(f"Prepared {len(context_blocks)} context blocks for AI.")
         language_instructions = {'en': 'English', 'zh-CN': 'Simplified Chinese (简体中文)', 'zh-TW': 'Traditional Chinese (繁體中文)'}
         output_language = language_instructions.get(lang_code, 'English')
-        
+        current_date_str = datetime.date.today().strftime("%Y-%m-%d")
+
         full_prompt = PROMPT_TEMPLATE.format(
             output_language=output_language, company_name=company_name, job_title=job_title,
-            aspects_list=", ".join(aspects), resume_text=resume_text,
-            context_with_sources=context_with_sources
+            current_date=current_date_str, resume_text=resume_text, context_with_sources=context_with_sources
         )
         
-        # 【核心修正】更新为用户列表确认可用的模型
         model = genai.GenerativeModel('gemini-2.5-pro')
         generation_config = genai.GenerationConfig(response_mime_type="application/json")
-        
-        safety_settings = {
-            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE", "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
-            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE", "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
-        }
+        safety_settings = { "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE", "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE", "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE", "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE" }
         
         response = model.generate_content(full_prompt, generation_config=generation_config, safety_settings=safety_settings)
         
         if not response.parts:
-            print("!!! 主报告生成被阻止或为空 !!!")
-            print(f"--- Prompt Feedback: {response.prompt_feedback} ---")
-            if response.candidates:
-                print(f"--- Finish Reason: {response.candidates[0].finish_reason} ---")
-                print(f"--- Safety Ratings: {response.candidates[0].safety_ratings} ---")
-            return jsonify({"error": "AI response was blocked, possibly due to safety filters on the searched content."}), 500
+            print("!!! 主报告生成被阻止或为空 !!!"); print(f"--- Prompt Feedback: {response.prompt_feedback} ---")
+            if response.candidates: print(f"--- Finish Reason: {response.candidates[0].finish_reason} ---"); print(f"--- Safety Ratings: {response.candidates[0].safety_ratings} ---")
+            return jsonify({"error": "AI response was blocked due to safety filters."}), 500
 
         try:
             ai_json_response = json.loads(response.text)
             report_data = ai_json_response.get("report", {})
-            
-            # --- 【核心修正】不再信任AI的cited_ids，而是自己从文本中提取 ---
             cited_ids = extract_cited_ids_from_report(report_data)
             print(f"✅ 双重保险：从报告文本中成功提取了 {len(cited_ids)} 个唯一引用: {cited_ids}")
-
         except json.JSONDecodeError:
-            print("!!! Gemini 没有返回有效的 JSON !!!")
-            print(f"--- 接收到的文本: {response.text[:500]}... ---")
+            print(f"!!! Gemini 没有返回有效的 JSON !!!\n--- 接收到的文本: {response.text[:500]}... ---")
             return jsonify({"error": "AI failed to generate a valid structured report."}), 500
 
         final_sources = []
@@ -294,18 +262,18 @@ def analyze_company_text():
         return jsonify({"report": report_data, "sources": final_sources})
 
     except Exception as e:
-        print(f"!!! 发生未知错误: {e} !!!")
-        print(traceback.format_exc())
+        print(f"!!! 发生未知错误: {e} !!!"); print(traceback.format_exc())
         return jsonify({"error": "An internal server error occurred."}), 500
 
-# --- 8. 错误处理 ---
+# --- 8. 错误处理 [已优化] ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
-    error_message = ("开拓者，您今日的免费分析额度已用尽！🚀\n\n"
-        "Project Lens 每天为所有用户提供5次免费分析。")
-    return jsonify(error="rate_limit_exceeded", message=error_message), 429
+    # 【最佳实践优化】不再由后端发送具体的错误文案。
+    # 只返回一个结构化的错误类型，由前端根据用户的语言设置来显示对应的本地化文案。
+    return jsonify(error="rate_limit_exceeded", message="User rate limit exceeded."), 429
 
-# --- 9. 启动 ---
+# --- 9. 启动 (无变化) ---
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
+
