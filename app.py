@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 19.0 - 地理位置与时效性感知版 (Geo & Timeliness Aware Version)
-# 描述: 1. (已实现) 完整的国际化与维度扩展。
-#       2. (本次更新) 新增“地理位置感知”能力，AI会提取地点并进行区域化精准搜索，解决信息错配问题。
-#       3. (本次更新) 新增“职位时效分析”能力，AI会在时效性报告中明确分析职位是否可能已过期。
-#       4. (本次更新) 同步升级了AI Prompt和返回的数据结构，以支持以上新功能。
+# 版本: 20.0 - 引用防幻觉版 (Citation Anti-Hallucination Version)
+# 描述: 1. (已实现) 完整的地理位置与时效性感知。
+#       2. (本次更新) 强化了核心AI指令(Prompt)，明确禁止AI模型“脑补”或“幻觉出”
+#          任何不存在的引用ID，从根源上解决了部分RAG引用角标无法点击的问题。
 # -----------------------------------------------------------------------------
 
 import os
@@ -38,31 +37,26 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 3. 智能提取公司、职位和地点 [已升级] ---
+# --- 3. 智能提取实体 (无变化) ---
 def extract_entities_with_ai(text_blob):
     print("🤖 启动AI实体提取程序 (含地点)...")
     try:
         model = genai.GenerativeModel('gemini-2.5-pro')
-        # 【核心优化】Prompt现在要求提取地点信息
         prompt = (f'From the text below, extract the company name, job title, and location. Respond with a JSON object: {{"company_name": "...", "job_title": "...", "location": "..."}}.\nIf a value isn\'t found, return an empty string "".\n\nText:\n---\n{text_blob}\n---\n')
         response = model.generate_content(prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"))
         
         if not response.parts:
-            print(f"--- 实体提取AI响应被阻止: {response.prompt_feedback} ---")
-            return text_blob, "", ""
+            print(f"--- 实体提取AI响应被阻止: {response.prompt_feedback} ---"); return text_blob, "", ""
             
         entities = json.loads(response.text)
-        company = entities.get("company_name", "")
-        job_title = entities.get("job_title", "")
-        location = entities.get("location", "") # 新增地点提取
+        company, job_title, location = entities.get("company_name", ""), entities.get("job_title", ""), entities.get("location", "")
         
         print(f"✅ AI提取成功: 公司='{company}', 职位='{job_title}', 地点='{location}'")
         return company if company else text_blob, job_title, location
     except Exception as e:
-        print(f"❌ AI实体提取失败: {e}. 将使用原始文本。")
-        return text_blob, "", ""
+        print(f"❌ AI实体提取失败: {e}. 将使用原始文本。"); return text_blob, "", ""
 
-# --- 4. 辅助函数：执行Google搜索 (无变化) ---
+# --- 4. Google搜索 (无变化) ---
 def perform_google_search(query, api_key, cse_id, num_results=2):
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results, 'sort': 'date'}
@@ -75,7 +69,7 @@ def perform_google_search(query, api_key, cse_id, num_results=2):
     except requests.exceptions.RequestException as e:
         print(f"Google搜索请求失败: {e}"); return [], []
 
-# --- 5. 辅助函数：网页爬虫 (无变化) ---
+# --- 5. 网页爬虫 (无变化) ---
 def scrape_website_for_text(url):
     try:
         headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
@@ -90,12 +84,15 @@ def scrape_website_for_text(url):
 # --- 6. 核心AI指令 (Prompt) [已升级] ---
 PROMPT_TEMPLATE = (
     "As 'Project Lens', an expert AI assistant, generate a detailed analysis report in {output_language} as a JSON object.\n"
-    "**Citation Rules:** Cite sources `[Source ID: X]` using tags like `[1]`, `[2]` in your text. Include all used IDs in `cited_ids`.\n"
+    "**Citation Rules (VERY IMPORTANT):**\n"
+    "1. Cite information by embedding the corresponding source tag (e.g., `[1]`, `[2]`) provided in the `Research Data`.\n"
+    "2. **You MUST ONLY use the source IDs provided in the `Research Data` section. DO NOT invent, hallucinate, or create any source IDs that are not explicitly given to you.**\n"
+    "3. Include all genuinely used IDs in the final `cited_ids` array.\n"
     "**Information Provided:**\n"
     "1. **Company, Role & Location:** {company_name} - {job_title} in {location}\n"
     "2. **Current Date:** {current_date}\n"
     "3. **Applicant's Resume/Bio:**\n   ```{resume_text}```\n"
-    "4. **Research Data:**\n   ```{context_with_sources}```\n"
+    "4. **Research Data (Each block has a `[Source ID: X]`):**\n   ```{context_with_sources}```\n"
     "**Your Task:** Synthesize all info into a single JSON object with the following structure:\n"
     "```json\n"
     "{{\n"
@@ -103,30 +100,30 @@ PROMPT_TEMPLATE = (
     '    "company_location": "{location}",\n'
     '    "red_flag_status": "Your assessment (e.g., \'Low Risk\').",\n'
     '    "red_flag_text": "Detailed explanation for red flags. Cite sources.",\n'
-    '    "hiring_experience_text": "Analysis of hiring process and candidate experience. Cite sources.",\n'
-    '    "timeliness_analysis": "1. Analyze information recency. 2. **Analyze the job posting status (e.g., \'Likely open\', \'May close soon\', \'Potentially expired\') based on its posting date from the context and provide a clear reason.** Cite sources.",\n'
+    '    "hiring_experience_text": "Analysis of hiring process. Cite sources.",\n'
+    '    "timeliness_analysis": "1. Analyze info recency. 2. Analyze job posting status (e.g., \'Likely open\', \'Potentially expired\') and give a reason. Cite sources.",\n'
     '    "culture_fit": {{ "reputation": "", "management": "", "sustainability": "", "wlb": "", "growth": "", "salary": "", "overtime": "", "innovation": "", "benefits": "", "diversity": "", "training": "" }},\n'
-    '    "value_match_score": "A number between 0-100. 0 if no resume.",\n'
-    '    "value_match_text": "Detailed explanation of the match score. Cite sources.",\n'
+    '    "value_match_score": "A number from 0-100. 0 if no resume.",\n'
+    '    "value_match_text": "Explanation of the match score. Cite sources.",\n'
     '    "final_risk_rating": "Your final risk rating.",\n'
-    '    "final_risk_text": "A summary justifying the final rating. Cite sources."\n'
+    '    "final_risk_text": "Summary justifying the final rating. Cite sources."\n'
     '  }},\n'
     '  "cited_ids": []\n'
     "}}\n"
     "```"
 )
 
-# --- 7. 辅助函数：从文本中提取所有引用ID (无变化) ---
+# --- 7. 提取引用ID (无变化) ---
 def extract_cited_ids_from_report(report_data):
     return sorted(list(set(int(id_str) for id_str in re.findall(r'\[(\d+)\]', json.dumps(report_data)))))
 
-# --- 8. API路由 [已升级] ---
+# --- 8. API路由 (无变化) ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
         
-    print("--- v19.0 Geo & Timeliness Aware Analysis request received! ---")
+    print("--- v20.0 Anti-Hallucination Version Analysis request received! ---")
     try:
         data = request.get_json();
         if not data: return jsonify({"error": "Invalid JSON"}), 400
@@ -138,8 +135,6 @@ def analyze_company_text():
         if not company_name: return jsonify({"error": "Could not identify company name"}), 400
 
         context_blocks, source_map, source_id_counter = [], {}, 1
-        
-        # 【核心优化】如果提取到地点，就将其加入到所有搜索查询中
         location_query_part = f' "{location}"' if location else ""
         
         comprehensive_queries = [
@@ -163,7 +158,7 @@ def analyze_company_text():
                     context_blocks.append(f"[Source ID: {source_id_counter}] {snippet}")
                     source_map[source_id_counter] = source_info
                     source_id_counter += 1
-            time.sleep(0.2) # 稍微降低速率以避免触发速率限制
+            time.sleep(0.2) 
 
         if not context_blocks: return jsonify({"error": "no_info_found"}), 404
 
@@ -192,7 +187,6 @@ def analyze_company_text():
             print(f"!!! Gemini 返回了无效的 JSON: {response.text[:500]}... !!!"); return jsonify({"error": "AI failed to generate valid report."}), 500
 
         final_sources = [ {**source_map[sid], 'id': sid} for sid in cited_ids if sid in source_map ]
-        # 【核心优化】在顶层返回公司名和地点，方便前端直接展示
         return jsonify({"company_name": company_name, "report": report_data, "sources": final_sources})
 
     except Exception as e:
