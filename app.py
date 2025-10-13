@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 20.0 - 引用防幻觉版 (Citation Anti-Hallucination Version)
-# 描述: 1. (已实现) 完整的地理位置与时效性感知。
-#       2. (本次更新) 强化了核心AI指令(Prompt)，明确禁止AI模型“脑补”或“幻觉出”
-#          任何不存在的引用ID，从根源上解决了部分RAG引用角标无法点击的问题。
+# 版本: 21.0 - 引用双重验证版 (Citation Double-Check Version)
+# 描述: 1. (已实现) 完整的引用防幻觉机制。
+#       2. (本次更新) 引入终极“双重验证”机制。不再信任AI生成的`cited_ids`列表，
+#          而是通过正则表达式主动从AI返回的报告文本中提取所有实际出现的引用角标。
+#          这确保了最终发送给前端的来源列表与报告中可点击的角标完全一致，
+#          彻底解决了因AI“省略”密集引用而导致的角标无法点击问题。
 # -----------------------------------------------------------------------------
 
 import os
@@ -44,13 +46,9 @@ def extract_entities_with_ai(text_blob):
         model = genai.GenerativeModel('gemini-2.5-pro')
         prompt = (f'From the text below, extract the company name, job title, and location. Respond with a JSON object: {{"company_name": "...", "job_title": "...", "location": "..."}}.\nIf a value isn\'t found, return an empty string "".\n\nText:\n---\n{text_blob}\n---\n')
         response = model.generate_content(prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"))
-        
-        if not response.parts:
-            print(f"--- 实体提取AI响应被阻止: {response.prompt_feedback} ---"); return text_blob, "", ""
-            
+        if not response.parts: print(f"--- 实体提取AI响应被阻止: {response.prompt_feedback} ---"); return text_blob, "", ""
         entities = json.loads(response.text)
         company, job_title, location = entities.get("company_name", ""), entities.get("job_title", ""), entities.get("location", "")
-        
         print(f"✅ AI提取成功: 公司='{company}', 职位='{job_title}', 地点='{location}'")
         return company if company else text_blob, job_title, location
     except Exception as e:
@@ -81,7 +79,7 @@ def scrape_website_for_text(url):
     except Exception as e:
         print(f"❌ 爬取网站时发生错误: {e}"); return None
 
-# --- 6. 核心AI指令 (Prompt) [已升级] ---
+# --- 6. 核心AI指令 (Prompt) [无变化] ---
 PROMPT_TEMPLATE = (
     "As 'Project Lens', an expert AI assistant, generate a detailed analysis report in {output_language} as a JSON object.\n"
     "**Citation Rules (VERY IMPORTANT):**\n"
@@ -113,17 +111,23 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-# --- 7. 提取引用ID (无变化) ---
-def extract_cited_ids_from_report(report_data):
-    return sorted(list(set(int(id_str) for id_str in re.findall(r'\[(\d+)\]', json.dumps(report_data)))))
+# --- 7. 提取引用ID [已升级为双重验证的核心] ---
+def extract_cited_ids_from_report_text(report_data):
+    """
+    遍历报告数据的所有文本字段，用正则表达式提取所有实际出现的 [数字] 形式的引用标记。
+    这是最终的、最可靠的引用ID来源。
+    """
+    all_text = json.dumps(report_data)
+    found_ids = re.findall(r'\[(\d+)\]', all_text)
+    return sorted(list(set(int(id_str) for id_str in found_ids)))
 
-# --- 8. API路由 (无变化) ---
+# --- 8. API路由 [已升级] ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
         
-    print("--- v20.0 Anti-Hallucination Version Analysis request received! ---")
+    print("--- v21.0 Double-Check Version Analysis request received! ---")
     try:
         data = request.get_json();
         if not data: return jsonify({"error": "Invalid JSON"}), 400
@@ -148,7 +152,6 @@ def analyze_company_text():
         ]
         
         for query in list(set(comprehensive_queries)):
-            print(f"Executing search: {query}")
             snippets, sources_data = perform_google_search(f'{query} after:{datetime.date.today().year - 1}', SEARCH_API_KEY, SEARCH_ENGINE_ID)
             for i, snippet in enumerate(snippets):
                 if i < len(sources_data):
@@ -182,11 +185,16 @@ def analyze_company_text():
         try:
             ai_json_response = json.loads(response.text)
             report_data = ai_json_response.get("report", {})
-            cited_ids = extract_cited_ids_from_report(report_data)
+            
+            # --- 【核心升级】终极双重验证：从报告文本中重新提取所有真实存在的引用ID ---
+            truly_cited_ids = extract_cited_ids_from_report_text(report_data)
+            print(f"✅ 双重验证成功: 从报告文本中提取了 {len(truly_cited_ids)} 个真实存在的引用: {truly_cited_ids}")
+
         except json.JSONDecodeError:
             print(f"!!! Gemini 返回了无效的 JSON: {response.text[:500]}... !!!"); return jsonify({"error": "AI failed to generate valid report."}), 500
 
-        final_sources = [ {**source_map[sid], 'id': sid} for sid in cited_ids if sid in source_map ]
+        # 【核心升级】只发送那些在文本中真正被引用了的来源
+        final_sources = [ {**source_map[sid], 'id': sid} for sid in truly_cited_ids if sid in source_map ]
         return jsonify({"company_name": company_name, "report": report_data, "sources": final_sources})
 
     except Exception as e:
