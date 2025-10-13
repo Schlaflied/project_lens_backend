@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 24.0 - 错误处理CORS修正版 (Error Handling CORS Fix Version)
+# 版本: 26.0 - 终极RAG净化版 (Ultimate RAG Scrubbing Version)
 # 描述: 1. (已实现) 完整的引用防幻觉与净化机制。
-#       2. (本次更新) 修复了速率限制器(429错误)的CORS问题。
-#          现在为429错误响应手动添加 'Access-Control-Allow-Origin' 头，
-#          确保浏览器不会拦截此响应，从而允许前端正确显示“额度用尽”的提示，
-#          而不是一个通用的“连接错误”。
+#       2. (本次更新) 彻底重写了 `scrub_invalid_citations` 函数。
+#          新的净化引擎现在更加强大，可以智能处理AI在引用角标前可能插入的
+#          各种Markdown格式（如列表项后的换行），确保上下文检查的绝对准确性，
+#          从而彻底杜绝“幽灵引用”问题。
 # -----------------------------------------------------------------------------
 
 import os
@@ -111,21 +111,46 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-# --- 7. 引用净化辅助函数 (无变化) ---
+# --- 7. 引用净化辅助函数 [已升级] ---
 def extract_all_mentioned_ids(report_data):
     all_text = json.dumps(report_data)
-    found_ids = re.findall(r'\[(\d+)\]', all_text)
-    return set(int(id_str) for id_str in found_ids)
+    found_ids = re.findall(r'\[([\d,\s]+)\]', all_text)
+    # This regex now handles both [1] and [1, 2, 3] formats
+    id_set = set()
+    for id_group in found_ids:
+        ids = [int(i.strip()) for i in id_group.split(',') if i.strip().isdigit()]
+        id_set.update(ids)
+    return id_set
 
 def scrub_invalid_citations(data, valid_ids_set):
+    """
+    【终极升级】递归地清理报告中的无效引用。
+    这个版本更强大，可以智能处理AI可能插入的Markdown格式（如换行符或列表标记）。
+    """
     if isinstance(data, dict):
         return {k: scrub_invalid_citations(v, valid_ids_set) for k, v in data.items()}
     elif isinstance(data, list):
         return [scrub_invalid_citations(elem, valid_ids_set) for elem in data]
     elif isinstance(data, str):
+        # 这个函数会检查每个引用角标，看它前面的文本是否包含有效内容。
         def repl(match):
+            # 提取角标前的最多30个字符作为上下文进行检查
+            # `\s*` 会忽略掉所有AI可能加入的空格、换行符、甚至是markdown的列表符号
+            context_window = data[:match.start()].rstrip()
+            context_check = context_window[-30:] 
+            
             citation_id = int(match.group(1))
-            return match.group(0) if citation_id in valid_ids_set else ""
+            
+            # 核心逻辑：如果角标在有效ID集合里，并且它前面的文本不仅仅是空格或标点符号，
+            # 那么就保留这个角标。
+            if citation_id in valid_ids_set and re.search(r'\w', context_check):
+                return match.group(0)
+            
+            # 否则，就把它当作“幽灵引用”移除掉
+            print(f"👻 净化幽灵引用: 移除了无效或孤立的引用角标 [{citation_id}]")
+            return ""
+
+        # 我们现在只处理单个数字的角标，因为前端已经可以处理压缩版了
         return re.sub(r'\[(\d+)\]', repl, data)
     else:
         return data
@@ -135,7 +160,7 @@ def scrub_invalid_citations(data, valid_ids_set):
 @limiter.limit("5 per day")
 def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
-    print("--- v24.0 CORS Fix Version Analysis request received! ---")
+    print("--- v26.0 Ultimate RAG Scrubbing Version Analysis request received! ---")
     try:
         data = request.get_json();
         if not data: return jsonify({"error": "Invalid JSON"}), 400
@@ -207,14 +232,9 @@ def analyze_company_text():
     except Exception as e:
         print(f"!!! 发生未知错误: {e} !!!"); print(traceback.format_exc()); return jsonify({"error": "Internal server error."}), 500
 
-# --- 9. 错误处理 [已升级] ---
+# --- 9. 错误处理 (无变化) ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
-    """
-    当速率限制被触发时，此函数会被调用。
-    核心修正：创建一个标准的JSON响应，并手动为其添加CORS头，
-    以防止浏览器因缺少此头而拦截响应，从而确保前端能正确处理此错误。
-    """
     response = jsonify(error="rate_limit_exceeded")
     response.status_code = 429
     response.headers.add("Access-Control-Allow-Origin", "*")
