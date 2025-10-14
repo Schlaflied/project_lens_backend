@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 24.0 - 错误处理CORS修正版 (Error Handling CORS Fix Version)
+# 版本: 24.1 - 引用链接注入版 (Citation Link Injection Version)
 # 描述: 1. (已实现) 完整的引用防幻觉与净化机制。
-#       2. (本次更新) 修复了速率限制器(429错误)的CORS问题。
-#          现在为429错误响应手动添加 'Access-Control-Allow-Origin' 头，
-#          确保浏览器不会拦截此响应，从而允许前端正确显示“额度用尽”的提示，
-#          而不是一个通用的“连接错误”。
+#       2. (本次更新) 将报告中有效的引用角标（如 [1]）替换为可点击的
+#          Markdown链接格式（如 [1](URL)），方便前端直接渲染。
 # -----------------------------------------------------------------------------
 
 import os
@@ -39,11 +37,11 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 3. 智能提取实体 (无变化) ---
+# --- 3. 智能提取实体 ---
 def extract_entities_with_ai(text_blob):
     print("🤖 启动AI实体提取程序 (含地点)...")
     try:
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         prompt = (f'From the text below, extract the company name, job title, and location. Respond with a JSON object: {{"company_name": "...", "job_title": "...", "location": "..."}}.\nIf a value isn\'t found, return an empty string "".\n\nText:\n---\n{text_blob}\n---\n')
         response = model.generate_content(prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"))
         if not response.parts: print(f"--- 实体提取AI响应被阻止: {response.prompt_feedback} ---"); return text_blob, "", ""
@@ -54,7 +52,7 @@ def extract_entities_with_ai(text_blob):
     except Exception as e:
         print(f"❌ AI实体提取失败: {e}. 将使用原始文本。"); return text_blob, "", ""
 
-# --- 4. Google搜索 (无变化) ---
+# --- 4. Google搜索 ---
 def perform_google_search(query, api_key, cse_id, num_results=2):
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results, 'sort': 'date'}
@@ -67,7 +65,7 @@ def perform_google_search(query, api_key, cse_id, num_results=2):
     except requests.exceptions.RequestException as e:
         print(f"Google搜索请求失败: {e}"); return [], []
 
-# --- 5. 网页爬虫 (无变化) ---
+# --- 5. 网页爬虫 ---
 def scrape_website_for_text(url):
     try:
         headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
@@ -79,7 +77,7 @@ def scrape_website_for_text(url):
     except Exception as e:
         print(f"❌ 爬取网站时发生错误: {e}"); return None
 
-# --- 6. 核心AI指令 (Prompt) [无变化] ---
+# --- 6. 核心AI指令 (Prompt) ---
 PROMPT_TEMPLATE = (
     "As 'Project Lens', an expert AI assistant, generate a detailed analysis report in {output_language} as a JSON object.\n"
     "**Citation Rules (VERY IMPORTANT):**\n"
@@ -111,7 +109,7 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-# --- 7. 引用净化辅助函数 (无变化) ---
+# --- 7. 引用净化与链接注入辅助函数 ---
 def extract_all_mentioned_ids(report_data):
     all_text = json.dumps(report_data)
     found_ids = re.findall(r'\[(\d+)\]', all_text)
@@ -130,12 +128,34 @@ def scrub_invalid_citations(data, valid_ids_set):
     else:
         return data
 
-# --- 8. API路由 (无变化) ---
+# --- ✨ 新增函数: 将有效的引用角标替换为可点击的Markdown链接 ---
+def replace_citations_with_links(data, valid_ids_set, source_map):
+    """
+    递归遍历报告数据结构，将形如 [1] 的有效引用标记替换为 Markdown 链接格式 [1](URL)。
+    """
+    if isinstance(data, dict):
+        return {k: replace_citations_with_links(v, valid_ids_set, source_map) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [replace_citations_with_links(elem, valid_ids_set, source_map) for elem in data]
+    elif isinstance(data, str):
+        def repl(match):
+            citation_id = int(match.group(1))
+            if citation_id in valid_ids_set and citation_id in source_map:
+                link = source_map[citation_id].get('link')
+                if link:
+                    # 替换为Markdown链接格式
+                    return f'[{citation_id}]({link})'
+            return match.group(0)
+        return re.sub(r'\[(\d+)\]', repl, data)
+    else:
+        return data
+
+# --- 8. API路由 ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
-    print("--- v24.0 CORS Fix Version Analysis request received! ---")
+    print("--- v24.1 Link Injection Version Analysis request received! ---")
     try:
         data = request.get_json();
         if not data: return jsonify({"error": "Invalid JSON"}), 400
@@ -183,7 +203,7 @@ def analyze_company_text():
             context_with_sources="\n\n".join(context_blocks)
         )
         
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         safety_settings = { category: "BLOCK_NONE" for category in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]}
         response = model.generate_content(full_prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"), safety_settings=safety_settings)
         
@@ -198,29 +218,30 @@ def analyze_company_text():
             print(f"✅ 验证完成: AI提及 {len(all_mentioned_ids)}个引用, 其中 {len(valid_ids_set)}个是有效的: {sorted(list(valid_ids_set))}")
             scrubbed_report_data = scrub_invalid_citations(report_data, valid_ids_set)
             print("✅ 报告清理完成: 已移除所有幻觉出的引用角标。")
+
+            # --- ✨ 新增步骤: 注入Markdown链接 ---
+            report_with_links = replace_citations_with_links(scrubbed_report_data, valid_ids_set, source_map)
+            print("✅ 引用链接注入完成: 已将所有有效的引用角标转换为Markdown链接。")
+
         except json.JSONDecodeError:
             print(f"!!! Gemini 返回了无效的 JSON: {response.text[:500]}... !!!"); return jsonify({"error": "AI failed to generate valid report."}), 500
 
         final_sources = [ {**source_map[sid], 'id': sid} for sid in sorted(list(valid_ids_set)) if sid in source_map ]
-        return jsonify({"company_name": company_name, "report": scrubbed_report_data, "sources": final_sources})
+        
+        # --- ✨ 修改: 在最终响应中使用带有链接的报告 ---
+        return jsonify({"company_name": company_name, "report": report_with_links, "sources": final_sources})
 
     except Exception as e:
         print(f"!!! 发生未知错误: {e} !!!"); print(traceback.format_exc()); return jsonify({"error": "Internal server error."}), 500
 
-# --- 9. 错误处理 [已升级] ---
+# --- 9. 错误处理 ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
-    """
-    当速率限制被触发时，此函数会被调用。
-    核心修正：创建一个标准的JSON响应，并手动为其添加CORS头，
-    以防止浏览器因缺少此头而拦截响应，从而确保前端能正确处理此错误。
-    """
     response = jsonify(error="rate_limit_exceeded")
     response.status_code = 429
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response
 
-# --- 10. 启动 (无变化) ---
+# --- 10. 启动 ---
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)), debug=True)
-
