@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 27.0 - 引用链接增强版 (Clickable Citation Version)
+# 版本: 24.0 - 错误处理CORS修正版 (Error Handling CORS Fix Version)
 # 描述: 1. (已实现) 完整的引用防幻觉与净化机制。
-#       2. (本次更新) 新增了一个处理步骤，在净化报告后，自动将所有有效的
-#          引用角标 [id] 转换为可点击的Markdown链接格式 [id](url)，
-#          方便前端直接渲染为超链接。
+#       2. (本次更新) 修复了速率限制器(429错误)的CORS问题。
+#          现在为429错误响应手动添加 'Access-Control-Allow-Origin' 头，
+#          确保浏览器不会拦截此响应，从而允许前端正确显示“额度用尽”的提示，
+#          而不是一个通用的“连接错误”。
 # -----------------------------------------------------------------------------
 
 import os
@@ -42,7 +43,7 @@ except Exception as e:
 def extract_entities_with_ai(text_blob):
     print("🤖 启动AI实体提取程序 (含地点)...")
     try:
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        model = genai.GenerativeModel('gemini-2.5-pro')
         prompt = (f'From the text below, extract the company name, job title, and location. Respond with a JSON object: {{"company_name": "...", "job_title": "...", "location": "..."}}.\nIf a value isn\'t found, return an empty string "".\n\nText:\n---\n{text_blob}\n---\n')
         response = model.generate_content(prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"))
         if not response.parts: print(f"--- 实体提取AI响应被阻止: {response.prompt_feedback} ---"); return text_blob, "", ""
@@ -110,74 +111,31 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-# --- 7. 引用净化与增强辅助函数 ---
-
+# --- 7. 引用净化辅助函数 (无变化) ---
 def extract_all_mentioned_ids(report_data):
     all_text = json.dumps(report_data)
-    found_ids = re.findall(r'\[([\d,\s]+)\]', all_text)
-    id_set = set()
-    for id_group in found_ids:
-        ids = [int(i.strip()) for i in id_group.split(',') if i.strip().isdigit()]
-        id_set.update(ids)
-    return id_set
+    found_ids = re.findall(r'\[(\d+)\]', all_text)
+    return set(int(id_str) for id_str in found_ids)
 
 def scrub_invalid_citations(data, valid_ids_set):
-    """
-    【终极升级】递归地清理报告中的无效引用。
-    这个版本更强大，可以智能处理AI可能插入的Markdown格式（如换行符或列表标记）。
-    """
     if isinstance(data, dict):
         return {k: scrub_invalid_citations(v, valid_ids_set) for k, v in data.items()}
     elif isinstance(data, list):
         return [scrub_invalid_citations(elem, valid_ids_set) for elem in data]
     elif isinstance(data, str):
         def repl(match):
-            context_window = data[:match.start()].rstrip()
-            context_check = context_window[-30:]
             citation_id = int(match.group(1))
-            if citation_id in valid_ids_set and re.search(r'\w', context_check):
-                return match.group(0)
-            print(f"👻 净化幽灵引用: 移除了无效或孤立的引用角标 [{citation_id}]")
-            return ""
+            return match.group(0) if citation_id in valid_ids_set else ""
         return re.sub(r'\[(\d+)\]', repl, data)
     else:
         return data
 
-# --- V27.0 新增修改开始 ---
-def enrich_citations_with_links(data, source_map):
-    """
-    【新增功能】递归地查找有效的引用角标 [id]，并将其转换为可点击的Markdown链接格式 [id](url)。
-    这样，前端就可以轻松地将它们渲染成超链接了。
-    """
-    if isinstance(data, dict):
-        return {k: enrich_citations_with_links(v, source_map) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [enrich_citations_with_links(elem, source_map) for elem in data]
-    elif isinstance(data, str):
-        # 定义一个内部替换函数
-        def repl(match):
-            citation_id = int(match.group(1))
-            # 检查这个ID是否存在于我们的源数据地图中，并且有对应的链接
-            if citation_id in source_map and source_map[citation_id].get('link'):
-                url = source_map[citation_id]['link']
-                # 替换为Markdown链接格式
-                return f'[{citation_id}]({url})'
-            else:
-                # 如果因为某些原因（理论上在清理后不会发生）找不到链接，就保持原样
-                return match.group(0)
-        # 使用正则表达式查找所有的 `[数字]` 格式并应用上面的替换函数
-        return re.sub(r'\[(\d+)\]', repl, data)
-    else:
-        return data
-# --- V27.0 新增修改结束 ---
-
-
-# --- 8. API路由 ---
+# --- 8. API路由 (无变化) ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
-    print("--- v27.0 Clickable Citation Version Analysis request received! ---")
+    print("--- v24.0 CORS Fix Version Analysis request received! ---")
     try:
         data = request.get_json();
         if not data: return jsonify({"error": "Invalid JSON"}), 400
@@ -225,7 +183,7 @@ def analyze_company_text():
             context_with_sources="\n\n".join(context_blocks)
         )
         
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        model = genai.GenerativeModel('gemini-2.5-pro')
         safety_settings = { category: "BLOCK_NONE" for category in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]}
         response = model.generate_content(full_prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"), safety_settings=safety_settings)
         
@@ -238,31 +196,25 @@ def analyze_company_text():
             all_mentioned_ids = extract_all_mentioned_ids(report_data)
             valid_ids_set = all_mentioned_ids.intersection(source_map.keys())
             print(f"✅ 验证完成: AI提及 {len(all_mentioned_ids)}个引用, 其中 {len(valid_ids_set)}个是有效的: {sorted(list(valid_ids_set))}")
-            
-            # 步骤1: 清理无效引用
             scrubbed_report_data = scrub_invalid_citations(report_data, valid_ids_set)
             print("✅ 报告清理完成: 已移除所有幻觉出的引用角标。")
-
-            # --- V27.0 新增修改开始 ---
-            # 步骤2: 将有效的引用角标转换为带链接的Markdown格式
-            enriched_report_data = enrich_citations_with_links(scrubbed_report_data, source_map)
-            print("🔗 报告链接增强完成: 已将引用角标转换为Markdown链接。")
-            # --- V27.0 新增修改结束 ---
-
         except json.JSONDecodeError:
             print(f"!!! Gemini 返回了无效的 JSON: {response.text[:500]}... !!!"); return jsonify({"error": "AI failed to generate valid report."}), 500
 
         final_sources = [ {**source_map[sid], 'id': sid} for sid in sorted(list(valid_ids_set)) if sid in source_map ]
-        
-        # --- V27.0 修改：返回增强后的报告数据 ---
-        return jsonify({"company_name": company_name, "report": enriched_report_data, "sources": final_sources})
+        return jsonify({"company_name": company_name, "report": scrubbed_report_data, "sources": final_sources})
 
     except Exception as e:
         print(f"!!! 发生未知错误: {e} !!!"); print(traceback.format_exc()); return jsonify({"error": "Internal server error."}), 500
 
-# --- 9. 错误处理 (无变化) ---
+# --- 9. 错误处理 [已升级] ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
+    """
+    当速率限制被触发时，此函数会被调用。
+    核心修正：创建一个标准的JSON响应，并手动为其添加CORS头，
+    以防止浏览器因缺少此头而拦截响应，从而确保前端能正确处理此错误。
+    """
     response = jsonify(error="rate_limit_exceeded")
     response.status_code = 429
     response.headers.add("Access-Control-Allow-Origin", "*")
@@ -271,3 +223,4 @@ def ratelimit_handler(e):
 # --- 10. 启动 (无变化) ---
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)), debug=True)
+
