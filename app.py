@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 30.0 - 双重速率限制处理版 (Dual Rate-Limit Handling Version)
-# 描述: 1. (已实现) 完整的CORS修复与健壮的网络容错能力。
-#       2. (本次更新) 增加了对 Google Gemini API 自身速率限制 (ResourceExhausted) 的捕获。
-#          现在，无论是我们自己设置的每日5次限制，还是由Gemini API抛出的速率限制异常，
-#          后端都会优雅地返回相同的、带有正确CORS头的429多语言错误信息，
-#          从而彻底根治了因上游API速率限制而导致 "Internal Server Error" 的问题。
+# 版本: 31.0 - 全局错误捕获最终版 (Global Error Catcher Final Version)
+# 描述: 1. (已实现) 完整的CORS修复与双重速率限制处理。
+#       2. (本次更新) 增加了全局的500错误处理器 (@app.errorhandler(500))。
+#          这是一个终极的“安全网”，确保任何在主逻辑中未被捕获的、
+#          意料之外的服务器内部崩溃，都能被此处理器捕获，
+#          并返回一个带有正确CORS头的标准化JSON错误。
+#          这可以彻底根治因未知后端崩溃而导致前端显示 "Connection error" 的最终问题。
 # -----------------------------------------------------------------------------
 
 import os
@@ -49,7 +50,7 @@ def make_error_response(error_type, message, status_code):
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
     
-# ✨ 4. 新增：速率限制消息辅助函数 ---
+# --- 4. 速率限制消息辅助函数 (无变化) ---
 def get_rate_limit_message(request):
     """根据请求语言返回标准化的速率限制消息。"""
     messages = {
@@ -80,7 +81,6 @@ def extract_entities_with_ai(text_blob):
         print(f"✅ AI提取成功: 公司='{company}', 职位='{job_title}', 地点='{location}'")
         return company if company else text_blob, job_title, location
     except Exception as e:
-        # 这个异常现在也会被主路由的大 try-except 块捕获
         raise e
 
 # --- 6. Google搜索 (无变化) ---
@@ -171,13 +171,13 @@ def replace_citations_with_links(data, source_map):
         return re.sub(r'\[(\d+)\]', repl, data)
     return data
 
-# --- 10. API路由 [已升级] ---
+# --- 10. API路由 (无变化) ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
     
-    print("--- v30.0 Dual Rate-Limit Handling analysis request received! ---")
+    print("--- v31.0 Global Error Catcher analysis request received! ---")
     try:
         data = request.get_json();
         if not data: return make_error_response("invalid_json", "Request body is not valid JSON.", 400)
@@ -231,28 +231,37 @@ def analyze_company_text():
         final_sources = [ {**source_map[sid], 'id': sid} for sid in sorted(list(valid_ids_set)) if sid in source_map ]
         return jsonify({"company_name": company_name, "report": linked_report_data, "sources": final_sources})
 
-    # ✨ 核心修正 1：捕获 Google API 的速率限制错误
     except google_exceptions.ResourceExhausted as e:
         print(f"!!! Gemini API Rate Limit Exceeded: {e} !!!")
         message = get_rate_limit_message(request)
         return make_error_response("rate_limit_exceeded", message, 429)
-    # ✨ 核心修正 2：捕获 Google API 的权限错误
     except google_exceptions.PermissionDenied as e:
         print(f"!!! Gemini API Permission Denied: {e} !!!")
         error_message = "AI model permission denied. Please check your GEMINI_API_KEY and ensure the API and billing are enabled in your Google Cloud project."
         return make_error_response("gemini_permission_denied", error_message, 500)
-    # ✨ 核心修正 3：捕获所有其他未知错误
     except Exception as e:
-        print(f"!!! 发生未知错误: {e} !!!"); print(traceback.format_exc())
-        return make_error_response("internal_server_error", "An unexpected internal server error occurred.", 500)
+        print(f"!!! 发生未知错误(被主路由捕获): {e} !!!"); print(traceback.format_exc())
+        return make_error_response("internal_server_error", "An unexpected error occurred within the analysis function.", 500)
 
-# --- 11. 我们自己的速率限制错误处理 [已升级] ---
+# --- 11. 速率限制与全局错误处理器 [已升级] ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
     """这个函数现在只处理我们自己设置的每日5次限制。"""
     print(f"Flask-Limiter rate limit triggered: {e.description}")
     message = get_rate_limit_message(request)
     return make_error_response("rate_limit_exceeded", message, 429)
+
+@app.errorhandler(500)
+def handle_internal_server_error(e):
+    """
+    捕获所有未处理的500内部服务器错误（作为终极安全网）。
+    这可以确保即使发生意外崩溃，也能返回带CORS头的JSON响应。
+    """
+    print(f"!!! 全局500错误处理器被触发: {e} !!!")
+    print(traceback.format_exc())
+    error_message = "An unexpected internal server error occurred. The development team has been notified."
+    return make_error_response("internal_server_error", error_message, 500)
+
 
 # --- 12. 启动 (无变化) ---
 if __name__ == '__main__':
