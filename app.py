@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 29.0 - 精准AI错误定位版 (Precise AI Error Pinpoint Version)
+# 版本: 30.0 - 双重速率限制处理版 (Dual Rate-Limit Handling Version)
 # 描述: 1. (已实现) 完整的CORS修复与健壮的网络容错能力。
-#       2. (本次更新) 增加了对Google Gemini API特定错误的捕获。
-#          现在可以明确区分是“每日额度用尽(429)”还是“AI模型连接/权限(500)”问题。
-#          如果发生后者，会返回一个明确的、可操作的错误信息，
-#          引导开发者检查API密钥和GCP项目设置，彻底消灭模糊的 "Internal Server Error"。
+#       2. (本次更新) 增加了对 Google Gemini API 自身速率限制 (ResourceExhausted) 的捕获。
+#          现在，无论是我们自己设置的每日5次限制，还是由Gemini API抛出的速率限制异常，
+#          后端都会优雅地返回相同的、带有正确CORS头的429多语言错误信息，
+#          从而彻底根治了因上游API速率限制而导致 "Internal Server Error" 的问题。
 # -----------------------------------------------------------------------------
 
 import os
@@ -22,7 +22,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import traceback
 import datetime
-# ✨ 新增：导入Google API核心异常
+# ✨ 核心：导入Google API核心异常
 from google.api_core import exceptions as google_exceptions
 
 # --- 1. 初始化和配置 ---
@@ -48,8 +48,26 @@ def make_error_response(error_type, message, status_code):
     response.status_code = status_code
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
+    
+# ✨ 4. 新增：速率限制消息辅助函数 ---
+def get_rate_limit_message(request):
+    """根据请求语言返回标准化的速率限制消息。"""
+    messages = {
+        'zh-CN': "开拓者，你已经用完了今日的额度。🚀 Project Lens每天为用户提供五次免费公司查询，如果你是重度用户，通过订阅Pro（Coming Soon）或者请我喝杯咖啡☕️来重置查询次数。",
+        'zh-TW': "開拓者，你已經用完了今日的額度。🚀 Project Lens每天為用戶提供五次免費公司查詢，如果你是重度用戶，通過訂閱Pro（Coming Soon）或者請我喝杯咖啡☕️來重置查詢次數。",
+        'en': "Explorer, you have used up your free analysis quota for today. 🚀 Project Lens provides five free company analyses per day. If you're a heavy user, you can reset your query count by subscribing to Pro (Coming Soon) or by buying me a coffee ☕️."
+    }
+    lang_code = 'en'
+    try:
+        data = request.get_json(silent=True)
+        if data and 'language' in data:
+            lang_code = data.get('language')
+    except Exception:
+        pass
+    return messages.get(lang_code, messages['en'])
 
-# --- 4. 智能提取实体 (无变化) ---
+
+# --- 5. 智能提取实体 (无变化) ---
 def extract_entities_with_ai(text_blob):
     print("🤖 启动AI实体提取程序 (含地点)...")
     try:
@@ -62,9 +80,10 @@ def extract_entities_with_ai(text_blob):
         print(f"✅ AI提取成功: 公司='{company}', 职位='{job_title}', 地点='{location}'")
         return company if company else text_blob, job_title, location
     except Exception as e:
-        print(f"❌ AI实体提取失败: {e}. 将使用原始文本。"); return text_blob, "", ""
+        # 这个异常现在也会被主路由的大 try-except 块捕获
+        raise e
 
-# --- 5. Google搜索 (无变化) ---
+# --- 6. Google搜索 (无变化) ---
 def perform_google_search(query, api_key, cse_id, num_results=2):
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results, 'sort': 'date'}
@@ -78,16 +97,12 @@ def perform_google_search(query, api_key, cse_id, num_results=2):
         snippets = [item.get('snippet', '') for item in search_results.get('items', [])]
         sources = [{'title': item.get('title'), 'link': item.get('link')} for item in search_results.get('items', [])]
         return snippets, sources
-    except requests.exceptions.Timeout:
-        print(f"❌ Google搜索超时: 查询='{query}'"); return [], []
     except requests.exceptions.RequestException as e:
         print(f"❌ Google搜索请求失败: {e}"); return [], []
-    except json.JSONDecodeError as e:
-        print(f"❌ Google搜索响应JSON解析失败: {e}"); return [], []
     except Exception as e:
         print(f"❌ Google搜索时发生未知错误: {e}"); return [], []
 
-# --- 6. 网页爬虫 (无变化) ---
+# --- 7. 网页爬虫 (无变化) ---
 def scrape_website_for_text(url):
     try:
         headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
@@ -99,7 +114,7 @@ def scrape_website_for_text(url):
     except Exception as e:
         print(f"❌ 爬取网站时发生错误: {e}"); return None
 
-# --- 7. 核心AI指令 (Prompt) [无变化] ---
+# --- 8. 核心AI指令 (Prompt) [无变化] ---
 PROMPT_TEMPLATE = (
     "As 'Project Lens', an expert AI assistant, generate a detailed analysis report in {output_language} as a JSON object.\n"
     "**Citation Rules (VERY IMPORTANT):**\n"
@@ -131,7 +146,7 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-# --- 8. 引用净化与链接注入 (无变化) ---
+# --- 9. 引用净化与链接注入 (无变化) ---
 def extract_all_mentioned_ids(report_data):
     all_text = json.dumps(report_data)
     found_ids = re.findall(r'\[(\d+)\]', all_text)
@@ -156,13 +171,13 @@ def replace_citations_with_links(data, source_map):
         return re.sub(r'\[(\d+)\]', repl, data)
     return data
 
-# --- 9. API路由 [已升级] ---
+# --- 10. API路由 [已升级] ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
     
-    print("--- v29.0 Precise AI Error Pinpoint analysis request received! ---")
+    print("--- v30.0 Dual Rate-Limit Handling analysis request received! ---")
     try:
         data = request.get_json();
         if not data: return make_error_response("invalid_json", "Request body is not valid JSON.", 400)
@@ -216,32 +231,30 @@ def analyze_company_text():
         final_sources = [ {**source_map[sid], 'id': sid} for sid in sorted(list(valid_ids_set)) if sid in source_map ]
         return jsonify({"company_name": company_name, "report": linked_report_data, "sources": final_sources})
 
-    # ✨ 核心修正：捕获特定的Google API权限错误
+    # ✨ 核心修正 1：捕获 Google API 的速率限制错误
+    except google_exceptions.ResourceExhausted as e:
+        print(f"!!! Gemini API Rate Limit Exceeded: {e} !!!")
+        message = get_rate_limit_message(request)
+        return make_error_response("rate_limit_exceeded", message, 429)
+    # ✨ 核心修正 2：捕获 Google API 的权限错误
     except google_exceptions.PermissionDenied as e:
         print(f"!!! Gemini API Permission Denied: {e} !!!")
         error_message = "AI model permission denied. Please check your GEMINI_API_KEY and ensure the API and billing are enabled in your Google Cloud project."
         return make_error_response("gemini_permission_denied", error_message, 500)
+    # ✨ 核心修正 3：捕获所有其他未知错误
     except Exception as e:
         print(f"!!! 发生未知错误: {e} !!!"); print(traceback.format_exc())
         return make_error_response("internal_server_error", "An unexpected internal server error occurred.", 500)
 
-# --- 10. 速率限制错误处理 (无变化) ---
+# --- 11. 我们自己的速率限制错误处理 [已升级] ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
-    messages = {
-        'zh-CN': "开拓者，你已经用完了今日的额度。🚀 Project Lens每天为用户提供五次免费公司查询，如果你是重度用户，通过订阅Pro（Coming Soon）或者请我喝杯咖啡☕️来重置查询次数。",
-        'zh-TW': "開拓者，你已經用完了今日的額度。🚀 Project Lens每天為用戶提供五次免費公司查詢，如果你是重度用戶，通過訂閱Pro（Coming Soon）或者請我喝杯咖啡☕️來重置查詢次數。",
-        'en': "Explorer, you have used up your free analysis quota for today. 🚀 Project Lens provides five free company analyses per day. If you're a heavy user, you can reset your query count by subscribing to Pro (Coming Soon) or by buying me a coffee ☕️."
-    }
-    lang_code = 'en'
-    try:
-        data = request.get_json(silent=True)
-        if data and 'language' in data:
-            lang_code = data.get('language')
-    except Exception: pass
-    return make_error_response("rate_limit_exceeded", messages.get(lang_code, messages['en']), 429)
+    """这个函数现在只处理我们自己设置的每日5次限制。"""
+    print(f"Flask-Limiter rate limit triggered: {e.description}")
+    message = get_rate_limit_message(request)
+    return make_error_response("rate_limit_exceeded", message, 429)
 
-# --- 11. 启动 (无变化) ---
+# --- 12. 启动 (无变化) ---
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)), debug=True)
 
