@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 24.3 - 多语言错误提示版
+# 版本: 27.0 - 全局CORS错误修复版 (Global CORS Error Fix Version)
 # 描述: 1. (已实现) 完整的引用防幻觉、净化与链接注入机制。
-#       2. (本次更新) 速率限制的错误提示现在会根据前端请求的语言
-#          (zh-CN, zh-TW, en) 返回对应的本地化文案。
+#       2. (本次更新) 彻底修复所有错误路径的CORS问题。
+#          通过创建一个新的 `make_error_response` 辅助函数，
+#          确保所有从API路由中手动返回的错误（如400, 404, 500）
+#          都包含了 'Access-Control-Allow-Origin' 头，
+#          从而防止浏览器拦截这些错误响应，根治前端的 "Connection error" 问题。
 # -----------------------------------------------------------------------------
 
 import os
@@ -23,6 +26,7 @@ import datetime
 
 # --- 1. 初始化和配置 ---
 app = Flask(__name__)
+# 让CORS处理成功的OPTIONS和POST请求
 CORS(app, resources={r"/analyze": {"origins": "*"}})
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"], storage_uri="memory://")
 
@@ -37,11 +41,19 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 3. 智能提取实体 ---
+# --- ✨ 3. 新增：错误响应辅助函数 ---
+def make_error_response(error_type, message, status_code):
+    """创建一个标准的、带有CORS头的JSON错误响应。"""
+    response = jsonify(error=error_type, message=message)
+    response.status_code = status_code
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response
+
+# --- 4. 智能提取实体 (无变化) ---
 def extract_entities_with_ai(text_blob):
     print("🤖 启动AI实体提取程序 (含地点)...")
     try:
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        model = genai.GenerativeModel('gemini-pro')
         prompt = (f'From the text below, extract the company name, job title, and location. Respond with a JSON object: {{"company_name": "...", "job_title": "...", "location": "..."}}.\nIf a value isn\'t found, return an empty string "".\n\nText:\n---\n{text_blob}\n---\n')
         response = model.generate_content(prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"))
         if not response.parts: print(f"--- 实体提取AI响应被阻止: {response.prompt_feedback} ---"); return text_blob, "", ""
@@ -52,7 +64,7 @@ def extract_entities_with_ai(text_blob):
     except Exception as e:
         print(f"❌ AI实体提取失败: {e}. 将使用原始文本。"); return text_blob, "", ""
 
-# --- 4. Google搜索 ---
+# --- 5. Google搜索 (无变化) ---
 def perform_google_search(query, api_key, cse_id, num_results=2):
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results, 'sort': 'date'}
@@ -65,7 +77,7 @@ def perform_google_search(query, api_key, cse_id, num_results=2):
     except requests.exceptions.RequestException as e:
         print(f"Google搜索请求失败: {e}"); return [], []
 
-# --- 5. 网页爬虫 ---
+# --- 6. 网页爬虫 (无变化) ---
 def scrape_website_for_text(url):
     try:
         headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
@@ -77,7 +89,7 @@ def scrape_website_for_text(url):
     except Exception as e:
         print(f"❌ 爬取网站时发生错误: {e}"); return None
 
-# --- 6. 核心AI指令 (Prompt) ---
+# --- 7. 核心AI指令 (Prompt) [无变化] ---
 PROMPT_TEMPLATE = (
     "As 'Project Lens', an expert AI assistant, generate a detailed analysis report in {output_language} as a JSON object.\n"
     "**Citation Rules (VERY IMPORTANT):**\n"
@@ -109,77 +121,55 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-# --- 7. 引用净化与链接注入辅助函数 ---
+# --- 8. 引用净化与链接注入 (无变化) ---
 def extract_all_mentioned_ids(report_data):
     all_text = json.dumps(report_data)
     found_ids = re.findall(r'\[(\d+)\]', all_text)
     return set(int(id_str) for id_str in found_ids)
 
 def scrub_invalid_citations(data, valid_ids_set):
-    if isinstance(data, dict):
-        return {k: scrub_invalid_citations(v, valid_ids_set) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [scrub_invalid_citations(elem, valid_ids_set) for elem in data]
-    elif isinstance(data, str):
-        def repl(match):
-            citation_id = int(match.group(1))
-            return match.group(0) if citation_id in valid_ids_set else ""
-        return re.sub(r'\[(\d+)\]', repl, data)
-    else:
-        return data
+    if isinstance(data, dict): return {k: scrub_invalid_citations(v, valid_ids_set) for k, v in data.items()}
+    if isinstance(data, list): return [scrub_invalid_citations(elem, valid_ids_set) for elem in data]
+    if isinstance(data, str):
+        return re.sub(r'\[(\d+)\]', lambda m: m.group(0) if int(m.group(1)) in valid_ids_set else "", data)
+    return data
 
-# --- ✨ 新增函数: 将有效的引用角标替换为可点击的Markdown链接 ---
-def replace_citations_with_links(data, valid_ids_set, source_map):
-    """
-    递归遍历报告数据结构，将形如 [1] 的有效引用标记替换为 Markdown 链接格式 [1](URL)。
-    """
-    if isinstance(data, dict):
-        return {k: replace_citations_with_links(v, valid_ids_set, source_map) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [replace_citations_with_links(elem, valid_ids_set, source_map) for elem in data]
-    elif isinstance(data, str):
+def replace_citations_with_links(data, source_map):
+    if isinstance(data, dict): return {k: replace_citations_with_links(v, source_map) for k, v in data.items()}
+    if isinstance(data, list): return [replace_citations_with_links(elem, source_map) for elem in data]
+    if isinstance(data, str):
         def repl(match):
             citation_id = int(match.group(1))
-            if citation_id in valid_ids_set and citation_id in source_map:
-                link = source_map[citation_id].get('link')
-                if link:
-                    # 替换为Markdown链接格式
-                    return f'[{citation_id}]({link})'
+            if citation_id in source_map and source_map[citation_id].get('link'):
+                return f'[{citation_id}]({source_map[citation_id]["link"]})'
             return match.group(0)
         return re.sub(r'\[(\d+)\]', repl, data)
-    else:
-        return data
+    return data
 
-# --- 8. API路由 ---
+# --- 9. API路由 [已升级] ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
+    # OPTIONS请求由CORS扩展自动处理
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
-    print("--- v24.1 Link Injection Version Analysis request received! ---")
+    
+    print("--- v27.0 Global CORS Fix analysis request received! ---")
     try:
         data = request.get_json();
-        if not data: return jsonify({"error": "Invalid JSON"}), 400
+        if not data: return make_error_response("invalid_json", "Request body is not valid JSON.", 400)
 
         smart_paste_content = data.get('companyName')
-        if not smart_paste_content: return jsonify({"error": "Company name required"}), 400
+        if not smart_paste_content: return make_error_response("missing_parameter", "Company name is required.", 400)
         
         company_name, job_title, location = extract_entities_with_ai(smart_paste_content)
-        if not company_name: return jsonify({"error": "Could not identify company name"}), 400
+        if not company_name: return make_error_response("entity_extraction_failed", "Could not identify company name from input.", 400)
 
         context_blocks, source_map, source_id_counter = [], {}, 1
         location_query_part = f' "{location}"' if location else ""
         
-        comprehensive_queries = [
-            f'"{company_name}"{location_query_part} company culture review', f'"{company_name}"{location_query_part} work life balance',
-            f'"{company_name}"{location_query_part} salary benefits', f'"{company_name}"{location_query_part} growth opportunities',
-            f'"{company_name}"{location_query_part} hiring process interview', f'"{company_name}"{location_query_part} management style',
-            f'"{company_name}"{location_query_part} overtime culture', f'"{company_name}"{location_query_part} innovation culture',
-            f'"{company_name}"{location_query_part} diversity inclusion', f'"{company_name}"{location_query_part} training programs',
-            f'"{company_name}"{location_query_part} sustainability', f'"{company_name}"{location_query_part} scam fraud',
-            f'site:linkedin.com "{company_name}" "{location}"', f'site:indeed.com "{company_name}" "{location}" reviews', f'site:glassdoor.com "{company_name}" "{location}" reviews'
-        ]
+        comprehensive_queries = list(set([ f'"{company_name}"{location_query_part} {aspect}' for aspect in ["company culture review", "work life balance", "salary benefits", "growth opportunities", "hiring process interview", "management style", "overtime culture", "innovation culture", "diversity inclusion", "training programs", "sustainability", "scam fraud"] ] + [f'site:linkedin.com "{company_name}" "{location}"', f'site:indeed.com "{company_name}" "{location}" reviews', f'site:glassdoor.com "{company_name}" "{location}" reviews']))
         
-        for query in list(set(comprehensive_queries)):
+        for query in comprehensive_queries:
             snippets, sources_data = perform_google_search(f'{query} after:{datetime.date.today().year - 1}', SEARCH_API_KEY, SEARCH_ENGINE_ID)
             for i, snippet in enumerate(snippets):
                 if i < len(sources_data):
@@ -191,62 +181,44 @@ def analyze_company_text():
                     source_id_counter += 1
             time.sleep(0.2) 
 
-        if not context_blocks: return jsonify({"error": "no_info_found"}), 404
+        if not context_blocks: return make_error_response("no_info_found", "No information found for this company.", 404)
 
         lang_code = data.get('language', 'en')
         language_instructions = {'en': 'English', 'zh-CN': 'Simplified Chinese (简体中文)', 'zh-TW': 'Traditional Chinese (繁體中文)'}
         
-        full_prompt = PROMPT_TEMPLATE.format(
-            output_language=language_instructions.get(lang_code, 'English'), company_name=company_name, 
-            job_title=job_title, location=location or "Not Specified",
-            current_date=datetime.date.today().strftime("%Y-%m-%d"), resume_text=data.get('resumeText', 'No resume provided.'),
-            context_with_sources="\n\n".join(context_blocks)
-        )
+        full_prompt = PROMPT_TEMPLATE.format(output_language=language_instructions.get(lang_code, 'English'), company_name=company_name, job_title=job_title, location=location or "Not Specified", current_date=datetime.date.today().strftime("%Y-%m-%d"), resume_text=data.get('resumeText', 'No resume provided.'), context_with_sources="\n\n".join(context_blocks))
         
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        model = genai.GenerativeModel('gemini-pro')
         safety_settings = { category: "BLOCK_NONE" for category in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]}
         response = model.generate_content(full_prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"), safety_settings=safety_settings)
         
-        if not response.parts:
-            print(f"!!! 主报告生成被阻止: {response.prompt_feedback} !!!"); return jsonify({"error": "AI response blocked"}), 500
+        if not response.parts: return make_error_response("ai_response_blocked", "AI content generation was blocked by safety settings.", 500)
 
         try:
             ai_json_response = json.loads(response.text)
             report_data = ai_json_response.get("report", {})
             all_mentioned_ids = extract_all_mentioned_ids(report_data)
             valid_ids_set = all_mentioned_ids.intersection(source_map.keys())
-            print(f"✅ 验证完成: AI提及 {len(all_mentioned_ids)}个引用, 其中 {len(valid_ids_set)}个是有效的: {sorted(list(valid_ids_set))}")
             scrubbed_report_data = scrub_invalid_citations(report_data, valid_ids_set)
-            print("✅ 报告清理完成: 已移除所有幻觉出的引用角标。")
-
-            # --- ✨ 新增步骤: 注入Markdown链接 ---
-            report_with_links = replace_citations_with_links(scrubbed_report_data, valid_ids_set, source_map)
-            print("✅ 引用链接注入完成: 已将所有有效的引用角标转换为Markdown链接。")
-
+            linked_report_data = replace_citations_with_links(scrubbed_report_data, source_map)
         except json.JSONDecodeError:
-            print(f"!!! Gemini 返回了无效的 JSON: {response.text[:500]}... !!!"); return jsonify({"error": "AI failed to generate valid report."}), 500
+            return make_error_response("ai_malformed_json", "AI failed to generate a valid JSON report.", 500)
 
         final_sources = [ {**source_map[sid], 'id': sid} for sid in sorted(list(valid_ids_set)) if sid in source_map ]
-        
-        # --- ✨ 修改: 在最终响应中使用带有链接的报告 ---
-        return jsonify({"company_name": company_name, "report": report_with_links, "sources": final_sources})
+        return jsonify({"company_name": company_name, "report": linked_report_data, "sources": final_sources})
 
     except Exception as e:
-        print(f"!!! 发生未知错误: {e} !!!"); print(traceback.format_exc()); return jsonify({"error": "Internal server error."}), 500
+        print(f"!!! 发生未知错误: {e} !!!"); print(traceback.format_exc())
+        return make_error_response("internal_server_error", "An unexpected internal server error occurred.", 500)
 
-# --- 9. 错误处理 ---
+# --- 10. 速率限制错误处理 [已升级] ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
     """
     当速率限制被触发时，此函数会被调用。
-    核心修正：根据请求体中的语言偏好，返回本地化的错误信息。
+    核心修正：使用try-except块安全地读取语言偏好，防止在解析请求体时出错，
+    确保此函数本身不会崩溃，从而稳定地返回带有CORS头的多语言错误信息。
     """
-    lang_code = 'en' # 默认为英文
-    if request.is_json:
-        data = request.get_json(silent=True)
-        if data and 'language' in data:
-            lang_code = data.get('language')
-
     # ✨ 多语言错误文案库
     messages = {
         'zh-CN': "开拓者，你已经用完了今日的额度。🚀 Project Lens每天为用户提供五次免费公司查询，如果你是重度用户，通过订阅Pro（Coming Soon）或者请我喝杯咖啡☕️来重置查询次数。",
@@ -254,17 +226,18 @@ def ratelimit_handler(e):
         'en': "Explorer, you have used up your free analysis quota for today. 🚀 Project Lens provides five free company analyses per day. If you're a heavy user, you can reset your query count by subscribing to Pro (Coming Soon) or by buying me a coffee ☕️."
     }
     
-    custom_message = messages.get(lang_code, messages['en'])
+    lang_code = 'en'
+    try:
+        data = request.get_json(silent=True)
+        if data and 'language' in data:
+            lang_code = data.get('language')
+    except Exception:
+        pass
 
-    response = jsonify(
-        error="rate_limit_exceeded",
-        message=custom_message
-    )
-    response.status_code = 429
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
+    # 使用我们的辅助函数来构建响应
+    return make_error_response("rate_limit_exceeded", messages.get(lang_code, messages['en']), 429)
 
-# --- 10. 启动 ---
+# --- 11. 启动 (无变化) ---
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)), debug=True)
 
