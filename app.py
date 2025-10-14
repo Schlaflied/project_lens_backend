@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 27.0 - 全局CORS错误修复版 (Global CORS Error Fix Version)
-# 描述: 1. (已实现) 完整的引用防幻觉、净化与链接注入机制。
-#       2. (本次更新) 彻底修复所有错误路径的CORS问题。
-#          通过创建一个新的 `make_error_response` 辅助函数，
-#          确保所有从API路由中手动返回的错误（如400, 404, 500）
-#          都包含了 'Access-Control-Allow-Origin' 头，
-#          从而防止浏览器拦截这些错误响应，根治前端的 "Connection error" 问题。
+# 版本: 28.0 - 增强网络容错版 (Enhanced Network Fault Tolerance Version)
+# 描述: 1. (已实现) 完整的CORS修复与健壮的错误处理机制。
+#       2. (本次更新) 增强了 `perform_google_search` 函数的容错能力。
+#          通过在其中加入更全面的 try-except 块，
+#          确保即使单个Google搜索API请求失败（例如超时、网络波动），
+#          整个分析流程也不会崩溃，而是会记录错误并继续处理其他搜索结果，
+#          从而大幅减少 "Internal Server Error" 的出现概率。
 # -----------------------------------------------------------------------------
 
 import os
@@ -26,7 +26,6 @@ import datetime
 
 # --- 1. 初始化和配置 ---
 app = Flask(__name__)
-# 让CORS处理成功的OPTIONS和POST请求
 CORS(app, resources={r"/analyze": {"origins": "*"}})
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"], storage_uri="memory://")
 
@@ -41,7 +40,7 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- ✨ 3. 新增：错误响应辅助函数 ---
+# --- 3. 错误响应辅助函数 (无变化) ---
 def make_error_response(error_type, message, status_code):
     """创建一个标准的、带有CORS头的JSON错误响应。"""
     response = jsonify(error=error_type, message=message)
@@ -64,18 +63,43 @@ def extract_entities_with_ai(text_blob):
     except Exception as e:
         print(f"❌ AI实体提取失败: {e}. 将使用原始文本。"); return text_blob, "", ""
 
-# --- 5. Google搜索 (无变化) ---
+# --- 5. Google搜索 [已升级] ---
 def perform_google_search(query, api_key, cse_id, num_results=2):
+    """
+    执行Google搜索并优雅地处理潜在的网络错误。
+    核心修正：添加了更广泛的异常捕获，确保即使此请求失败，
+    也不会使整个应用程序崩溃。
+    """
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results, 'sort': 'date'}
     try:
-        response = requests.get(url, params=params); response.raise_for_status()
+        response = requests.get(url, params=params, timeout=15) # 增加超时设置
+        response.raise_for_status() # 检查HTTP错误（如4xx, 5xx）
         search_results = response.json()
+        
+        # 确保 'items' 键存在
+        if 'items' not in search_results:
+            print(f"⚠️ Google搜索成功但没有结果: 查询='{query}'")
+            return [], []
+            
         snippets = [item.get('snippet', '') for item in search_results.get('items', [])]
         sources = [{'title': item.get('title'), 'link': item.get('link')} for item in search_results.get('items', [])]
         return snippets, sources
+    except requests.exceptions.Timeout:
+        print(f"❌ Google搜索超时: 查询='{query}'")
+        return [], []
     except requests.exceptions.RequestException as e:
-        print(f"Google搜索请求失败: {e}"); return [], []
+        # 捕获所有其他 requests 相关的错误 (网络连接问题, DNS错误等)
+        print(f"❌ Google搜索请求失败: {e}")
+        return [], []
+    except json.JSONDecodeError as e:
+        # 如果响应不是有效的JSON
+        print(f"❌ Google搜索响应JSON解析失败: {e}")
+        return [], []
+    except Exception as e:
+        # 捕获所有其他未知错误
+        print(f"❌ Google搜索时发生未知错误: {e}")
+        return [], []
 
 # --- 6. 网页爬虫 (无变化) ---
 def scrape_website_for_text(url):
@@ -146,14 +170,13 @@ def replace_citations_with_links(data, source_map):
         return re.sub(r'\[(\d+)\]', repl, data)
     return data
 
-# --- 9. API路由 [已升级] ---
+# --- 9. API路由 (无变化) ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
-    # OPTIONS请求由CORS扩展自动处理
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
     
-    print("--- v27.0 Global CORS Fix analysis request received! ---")
+    print("--- v28.0 Enhanced Fault Tolerance analysis request received! ---")
     try:
         data = request.get_json();
         if not data: return make_error_response("invalid_json", "Request body is not valid JSON.", 400)
@@ -179,7 +202,7 @@ def analyze_company_text():
                     context_blocks.append(f"[Source ID: {source_id_counter}] {snippet}")
                     source_map[source_id_counter] = source_info
                     source_id_counter += 1
-            time.sleep(0.2) 
+            time.sleep(0.1) # 可以适当减少延迟
 
         if not context_blocks: return make_error_response("no_info_found", "No information found for this company.", 404)
 
@@ -211,33 +234,22 @@ def analyze_company_text():
         print(f"!!! 发生未知错误: {e} !!!"); print(traceback.format_exc())
         return make_error_response("internal_server_error", "An unexpected internal server error occurred.", 500)
 
-# --- 10. 速率限制错误处理 [已升级] ---
+# --- 10. 速率限制错误处理 (无变化) ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
-    """
-    当速率限制被触发时，此函数会被调用。
-    核心修正：使用try-except块安全地读取语言偏好，防止在解析请求体时出错，
-    确保此函数本身不会崩溃，从而稳定地返回带有CORS头的多语言错误信息。
-    """
-    # ✨ 多语言错误文案库
     messages = {
         'zh-CN': "开拓者，你已经用完了今日的额度。🚀 Project Lens每天为用户提供五次免费公司查询，如果你是重度用户，通过订阅Pro（Coming Soon）或者请我喝杯咖啡☕️来重置查询次数。",
         'zh-TW': "開拓者，你已經用完了今日的額度。🚀 Project Lens每天為用戶提供五次免費公司查詢，如果你是重度用戶，通過訂閱Pro（Coming Soon）或者請我喝杯咖啡☕️來重置查詢次數。",
         'en': "Explorer, you have used up your free analysis quota for today. 🚀 Project Lens provides five free company analyses per day. If you're a heavy user, you can reset your query count by subscribing to Pro (Coming Soon) or by buying me a coffee ☕️."
     }
-    
     lang_code = 'en'
     try:
         data = request.get_json(silent=True)
         if data and 'language' in data:
             lang_code = data.get('language')
-    except Exception:
-        pass
-
-    # 使用我们的辅助函数来构建响应
+    except Exception: pass
     return make_error_response("rate_limit_exceeded", messages.get(lang_code, messages['en']), 429)
 
 # --- 11. 启动 (无变化) ---
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)), debug=True)
-
