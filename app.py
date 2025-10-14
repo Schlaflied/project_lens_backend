@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 28.0 - 增强网络容错版 (Enhanced Network Fault Tolerance Version)
-# 描述: 1. (已实现) 完整的CORS修复与健壮的错误处理机制。
-#       2. (本次更新) 增强了 `perform_google_search` 函数的容错能力。
-#          通过在其中加入更全面的 try-except 块，
-#          确保即使单个Google搜索API请求失败（例如超时、网络波动），
-#          整个分析流程也不会崩溃，而是会记录错误并继续处理其他搜索结果，
-#          从而大幅减少 "Internal Server Error" 的出现概率。
+# 版本: 29.0 - 精准AI错误定位版 (Precise AI Error Pinpoint Version)
+# 描述: 1. (已实现) 完整的CORS修复与健壮的网络容错能力。
+#       2. (本次更新) 增加了对Google Gemini API特定错误的捕获。
+#          现在可以明确区分是“每日额度用尽(429)”还是“AI模型连接/权限(500)”问题。
+#          如果发生后者，会返回一个明确的、可操作的错误信息，
+#          引导开发者检查API密钥和GCP项目设置，彻底消灭模糊的 "Internal Server Error"。
 # -----------------------------------------------------------------------------
 
 import os
@@ -23,6 +22,8 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import traceback
 import datetime
+# ✨ 新增：导入Google API核心异常
+from google.api_core import exceptions as google_exceptions
 
 # --- 1. 初始化和配置 ---
 app = Flask(__name__)
@@ -63,43 +64,28 @@ def extract_entities_with_ai(text_blob):
     except Exception as e:
         print(f"❌ AI实体提取失败: {e}. 将使用原始文本。"); return text_blob, "", ""
 
-# --- 5. Google搜索 [已升级] ---
+# --- 5. Google搜索 (无变化) ---
 def perform_google_search(query, api_key, cse_id, num_results=2):
-    """
-    执行Google搜索并优雅地处理潜在的网络错误。
-    核心修正：添加了更广泛的异常捕获，确保即使此请求失败，
-    也不会使整个应用程序崩溃。
-    """
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results, 'sort': 'date'}
     try:
-        response = requests.get(url, params=params, timeout=15) # 增加超时设置
-        response.raise_for_status() # 检查HTTP错误（如4xx, 5xx）
+        response = requests.get(url, params=params, timeout=15)
+        response.raise_for_status()
         search_results = response.json()
-        
-        # 确保 'items' 键存在
         if 'items' not in search_results:
             print(f"⚠️ Google搜索成功但没有结果: 查询='{query}'")
             return [], []
-            
         snippets = [item.get('snippet', '') for item in search_results.get('items', [])]
         sources = [{'title': item.get('title'), 'link': item.get('link')} for item in search_results.get('items', [])]
         return snippets, sources
     except requests.exceptions.Timeout:
-        print(f"❌ Google搜索超时: 查询='{query}'")
-        return [], []
+        print(f"❌ Google搜索超时: 查询='{query}'"); return [], []
     except requests.exceptions.RequestException as e:
-        # 捕获所有其他 requests 相关的错误 (网络连接问题, DNS错误等)
-        print(f"❌ Google搜索请求失败: {e}")
-        return [], []
+        print(f"❌ Google搜索请求失败: {e}"); return [], []
     except json.JSONDecodeError as e:
-        # 如果响应不是有效的JSON
-        print(f"❌ Google搜索响应JSON解析失败: {e}")
-        return [], []
+        print(f"❌ Google搜索响应JSON解析失败: {e}"); return [], []
     except Exception as e:
-        # 捕获所有其他未知错误
-        print(f"❌ Google搜索时发生未知错误: {e}")
-        return [], []
+        print(f"❌ Google搜索时发生未知错误: {e}"); return [], []
 
 # --- 6. 网页爬虫 (无变化) ---
 def scrape_website_for_text(url):
@@ -170,13 +156,13 @@ def replace_citations_with_links(data, source_map):
         return re.sub(r'\[(\d+)\]', repl, data)
     return data
 
-# --- 9. API路由 (无变化) ---
+# --- 9. API路由 [已升级] ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
     
-    print("--- v28.0 Enhanced Fault Tolerance analysis request received! ---")
+    print("--- v29.0 Precise AI Error Pinpoint analysis request received! ---")
     try:
         data = request.get_json();
         if not data: return make_error_response("invalid_json", "Request body is not valid JSON.", 400)
@@ -202,7 +188,7 @@ def analyze_company_text():
                     context_blocks.append(f"[Source ID: {source_id_counter}] {snippet}")
                     source_map[source_id_counter] = source_info
                     source_id_counter += 1
-            time.sleep(0.1) # 可以适当减少延迟
+            time.sleep(0.1)
 
         if not context_blocks: return make_error_response("no_info_found", "No information found for this company.", 404)
 
@@ -230,6 +216,11 @@ def analyze_company_text():
         final_sources = [ {**source_map[sid], 'id': sid} for sid in sorted(list(valid_ids_set)) if sid in source_map ]
         return jsonify({"company_name": company_name, "report": linked_report_data, "sources": final_sources})
 
+    # ✨ 核心修正：捕获特定的Google API权限错误
+    except google_exceptions.PermissionDenied as e:
+        print(f"!!! Gemini API Permission Denied: {e} !!!")
+        error_message = "AI model permission denied. Please check your GEMINI_API_KEY and ensure the API and billing are enabled in your Google Cloud project."
+        return make_error_response("gemini_permission_denied", error_message, 500)
     except Exception as e:
         print(f"!!! 发生未知错误: {e} !!!"); print(traceback.format_exc())
         return make_error_response("internal_server_error", "An unexpected internal server error occurred.", 500)
@@ -253,3 +244,4 @@ def ratelimit_handler(e):
 # --- 11. 启动 (无变化) ---
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)), debug=True)
+
