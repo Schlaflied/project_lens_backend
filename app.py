@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 24.1 - 引用链接注入版 (Citation Link Injection Version)
-# 描述: 1. (已实现) 完整的引用防幻觉与净化机制。
-#       2. (本次更新) 将报告中有效的引用角标（如 [1]）替换为可点击的
-#          Markdown链接格式（如 [1](URL)），方便前端直接渲染。
+# 版本: 24.3 - 多语言错误提示版
+# 描述: 1. (已实现) 完整的引用防幻觉、净化与链接注入机制。
+#       2. (本次更新) 速率限制的错误提示现在会根据前端请求的语言
+#          (zh-CN, zh-TW, en) 返回对应的本地化文案。
 # -----------------------------------------------------------------------------
 
 import os
@@ -237,7 +237,29 @@ def analyze_company_text():
 # --- 9. 错误处理 ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
-    response = jsonify(error="rate_limit_exceeded")
+    """
+    当速率限制被触发时，此函数会被调用。
+    核心修正：根据请求体中的语言偏好，返回本地化的错误信息。
+    """
+    lang_code = 'en' # 默认为英文
+    if request.is_json:
+        data = request.get_json(silent=True)
+        if data and 'language' in data:
+            lang_code = data.get('language')
+
+    # ✨ 多语言错误文案库
+    messages = {
+        'zh-CN': "开拓者，你已经用完了今日的额度。🚀 Project Lens每天为用户提供五次免费公司查询，如果你是重度用户，通过订阅Pro（Coming Soon）或者请我喝杯咖啡☕️来重置查询次数。",
+        'zh-TW': "開拓者，你已經用完了今日的額度。🚀 Project Lens每天為用戶提供五次免費公司查詢，如果你是重度用戶，通過訂閱Pro（Coming Soon）或者請我喝杯咖啡☕️來重置查詢次數。",
+        'en': "Explorer, you have used up your free analysis quota for today. 🚀 Project Lens provides five free company analyses per day. If you're a heavy user, you can reset your query count by subscribing to Pro (Coming Soon) or by buying me a coffee ☕️."
+    }
+    
+    custom_message = messages.get(lang_code, messages['en'])
+
+    response = jsonify(
+        error="rate_limit_exceeded",
+        message=custom_message
+    )
     response.status_code = 429
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response
@@ -245,3 +267,4 @@ def ratelimit_handler(e):
 # --- 10. 启动 ---
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)), debug=True)
+
