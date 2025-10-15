@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 31.4 - 详细错误诊断版
-# 描述: 1. (已实现) 修复了CORS、搜索参数等核心功能Bug，并增加了健康检查。
-#       2. (本次更新) 在'analyze'函数内部增加了更详细的try-except块，
-#          分别包裹了两个关键的Gemini API调用。现在如果其中任何一个环节
-#          失败，前端将收到一个更具体的错误信息（例如 "ai_entity_extraction_error"），
-#          而不是一个笼统的 "internal_server_error"，极大地简化了远程调试的难度。
+# 版本: 32.0 - 最终引擎升级版 (Gemini 2.5 Pro)
+# 描述: 1. (已实现) 修复了所有已知Bug (CORS, 搜索, 依赖库)。
+#       2. (本次更新) 根据用户提供的可用模型列表，将核心AI模型
+#          最终升级为最强大的 'models/gemini-2.5-pro'。
+#          这将为用户带来最顶级的分析体验。
 # -----------------------------------------------------------------------------
 
 import os
@@ -27,11 +26,10 @@ from google.api_core import exceptions as google_exceptions
 
 # --- 1. 初始化和配置 ---
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}}) # 允许所有路由的CORS
+CORS(app, resources={r"/*": {"origins": "*"}})
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"], storage_uri="memory://")
 
 # --- 2. API密钥配置 ---
-# 将密钥加载移到全局作用域，方便健康检查函数访问
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SEARCH_API_KEY = os.getenv("SEARCH_API_KEY")
 SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
@@ -49,7 +47,6 @@ except Exception as e:
 
 # --- 3. 错误响应辅助函数 ---
 def make_error_response(error_type, message, status_code):
-    """创建一个标准的、带有CORS头的JSON错误响应。"""
     response = jsonify(error=error_type, message=message)
     response.status_code = status_code
     response.headers.add('Access-Control-Allow-Origin', '*')
@@ -57,7 +54,6 @@ def make_error_response(error_type, message, status_code):
     
 # --- 4. 速率限制消息辅助函数 ---
 def get_rate_limit_message(request):
-    """根据请求语言返回标准化的速率限制消息。"""
     messages = {
         'zh-CN': "开拓者，你已经用完了今日的额度。🚀 Project Lens每天为用户提供五次免费公司查询，如果你是重度用户，通过订阅Pro（Coming Soon）或者请我喝杯咖啡☕️来重置查询次数。",
         'zh-TW': "開拓者，你已經用完了今日的額度。🚀 Project Lens每天為用户提供五次免費公司查詢，如果你是重度用戶，通過訂閱Pro（Coming Soon）或者請我喝杯咖啡☕️來重置查詢次數。",
@@ -72,12 +68,12 @@ def get_rate_limit_message(request):
         pass
     return messages.get(lang_code, messages['en'])
 
-
-# --- 5. 智能提取实体 ---
+# --- 5. 智能提取实体 (已升级模型) ---
 def extract_entities_with_ai(text_blob):
-    print("🤖 启动AI实体提取程序 (含地点)...")
+    print("🤖 启动AI实体提取程序 (模型: Gemini 2.5 Pro)...")
     try:
-        model = genai.GenerativeModel('gemini-pro')
+        # [模型升级] 使用 'models/gemini-2.5-pro'
+        model = genai.GenerativeModel('models/gemini-2.5-pro')
         prompt = (f'From the text below, extract the company name, job title, and location. Respond with a JSON object: {{"company_name": "...", "job_title": "...", "location": "..."}}.\nIf a value isn\'t found, return an empty string "".\n\nText:\n---\n{text_blob}\n---\n')
         response = model.generate_content(prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"))
         if not response.parts: print(f"--- 实体提取AI响应被阻止: {response.prompt_feedback} ---"); return text_blob, "", ""
@@ -88,15 +84,9 @@ def extract_entities_with_ai(text_blob):
     except Exception as e:
         raise e
 
-# --- 6. Google搜索 (已修复) ---
+# --- 6. Google搜索 ---
 def perform_google_search(query, api_key, cse_id, num_results=2):
-    """
-    [BUG修复] 移除了无效的 'sort': 'date' 参数。
-    查询字符串中已经通过 'after:YYYY' 进行了年份筛选，
-    额外的 sort 参数不符合API规范，会导致API不返回任何结果。
-    """
     url = "https://www.googleapis.com/customsearch/v1"
-    # 修复：移除了 'sort': 'date'
     params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results}
     try:
         response = requests.get(url, params=params, timeout=15)
@@ -125,7 +115,7 @@ def scrape_website_for_text(url):
     except Exception as e:
         print(f"❌ 爬取网站时发生错误: {e}"); return None
 
-# --- 8. 核心AI指令 (Prompt) ---
+# --- 8. 核心AI指令 ---
 PROMPT_TEMPLATE = (
     "As 'Project Lens', an expert AI assistant, generate a detailed analysis report in {output_language} as a JSON object.\n"
     "**Citation Rules (VERY IMPORTANT):**\n"
@@ -183,37 +173,19 @@ def replace_citations_with_links(data, source_map):
     return data
 
 # --- 10. API路由 ---
-
-# [新增] 健康检查端点
 @app.route('/', methods=['GET'])
 def health_check():
-    """提供一个简单的健康检查端点来验证服务是否在线和API密钥是否配置。"""
-    key_status = {
-        "GEMINI_API_KEY": "配置成功" if GEMINI_API_KEY else "缺失",
-        "SEARCH_API_KEY": "配置成功" if SEARCH_API_KEY else "缺失",
-        "SEARCH_ENGINE_ID": "配置成功" if SEARCH_ENGINE_ID else "缺失"
-    }
+    key_status = { "GEMINI_API_KEY": "配置成功" if GEMINI_API_KEY else "缺失", "SEARCH_API_KEY": "配置成功" if SEARCH_API_KEY else "缺失", "SEARCH_ENGINE_ID": "配置成功" if SEARCH_ENGINE_ID else "缺失" }
     status_message = "服务运行正常" if all([GEMINI_API_KEY, SEARCH_API_KEY, SEARCH_ENGINE_ID]) else "警告：API密钥配置不完整，核心功能将无法使用"
-    
-    return jsonify({
-        "service_name": "Project Lens Backend",
-        "status": status_message,
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
-        "api_keys_status": key_status
-    }), 200
+    return jsonify({ "service_name": "Project Lens Backend", "status": status_message, "timestamp": datetime.datetime.utcnow().isoformat() + "Z", "api_keys_status": key_status }), 200
 
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
-    if request.method == 'OPTIONS':
-        return jsonify({'status': 'ok'}), 200
-    
-    if not API_KEYS_CONFIGURED:
-        return make_error_response("configuration_error", "一个或多个必需的API密钥未在服务器上配置。", 503)
+    if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
+    if not API_KEYS_CONFIGURED: return make_error_response("configuration_error", "一个或多个必需的API密钥未在服务器上配置。", 503)
 
-    print("--- v31.4 Detailed Diag analysis request received! ---")
-    
-    # [BUG修复] 将整个主逻辑包裹在一个大的try-except中，但内部增加了更详细的错误捕获
+    print("--- v32.0 Final Engine (2.5 Pro) analysis request received! ---")
     try:
         data = request.get_json()
         if not data: return make_error_response("invalid_json", "Request body is not valid JSON.", 400)
@@ -221,19 +193,17 @@ def analyze_company_text():
         smart_paste_content = data.get('companyName')
         if not smart_paste_content: return make_error_response("missing_parameter", "Company name is required.", 400)
         
-        # 详细诊断点 1: 实体提取
         try:
             company_name, job_title, location = extract_entities_with_ai(smart_paste_content)
         except Exception as e:
             print(f"!!! 实体提取AI调用失败: {e} !!!"); print(traceback.format_exc())
-            error_message = f"AI entity extraction failed. Error: {type(e).__name__}. This might be a problem with the Generative Language API permissions or billing."
+            error_message = f"AI entity extraction failed. Error: {type(e).__name__}. This might be a problem with the Generative Language API permissions or billing. Please ensure the model 'models/gemini-2.5-pro' is available for your project."
             return make_error_response("ai_entity_extraction_error", error_message, 500)
 
         if not company_name: return make_error_response("entity_extraction_failed", "Could not identify company name from input.", 400)
 
         context_blocks, source_map, source_id_counter = [], {}, 1
         location_query_part = f' "{location}"' if location else ""
-        
         comprehensive_queries = list(set([ f'"{company_name}"{location_query_part} {aspect}' for aspect in ["company culture review", "work life balance", "salary benefits", "growth opportunities", "hiring process interview", "management style", "overtime culture", "innovation culture", "diversity inclusion", "training programs", "sustainability", "scam fraud"] ] + [f'site:linkedin.com "{company_name}" "{location}"', f'site:indeed.com "{company_name}" "{location}" reviews', f'site:glassdoor.com "{company_name}" "{location}" reviews']))
         
         for query in comprehensive_queries:
@@ -255,9 +225,9 @@ def analyze_company_text():
         language_instructions = {'en': 'English', 'zh-CN': 'Simplified Chinese (简体中文)', 'zh-TW': 'Traditional Chinese (繁體中文)'}
         full_prompt = PROMPT_TEMPLATE.format(output_language=language_instructions.get(lang_code, 'English'), company_name=company_name, job_title=job_title, location=location or "Not Specified", current_date=datetime.date.today().strftime("%Y-%m-%d"), resume_text=data.get('resumeText', 'No resume provided.'), context_with_sources="\n\n".join(context_blocks))
         
-        # 详细诊断点 2: 核心分析
         try:
-            model = genai.GenerativeModel('gemini-pro')
+            # [模型升级] 使用 'models/gemini-2.5-pro'
+            model = genai.GenerativeModel('models/gemini-2.5-pro')
             safety_settings = { category: "BLOCK_NONE" for category in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]}
             response = model.generate_content(full_prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"), safety_settings=safety_settings)
         except Exception as e:
@@ -280,14 +250,6 @@ def analyze_company_text():
         final_sources = [ {**source_map[sid], 'id': sid} for sid in sorted(list(valid_ids_set)) if sid in source_map ]
         return jsonify({"company_name": company_name, "report": linked_report_data, "sources": final_sources})
 
-    except google_exceptions.ResourceExhausted as e:
-        print(f"!!! Gemini API Rate Limit Exceeded: {e} !!!")
-        message = get_rate_limit_message(request)
-        return make_error_response("rate_limit_exceeded", message, 429)
-    except google_exceptions.PermissionDenied as e:
-        print(f"!!! Gemini API Permission Denied: {e} !!!")
-        error_message = "AI model permission denied. Please check your GEMINI_API_KEY and ensure the API and billing are enabled in your Google Cloud project."
-        return make_error_response("gemini_permission_denied", error_message, 500)
     except Exception as e:
         print(f"!!! 发生未知错误(被主路由捕获): {e} !!!"); print(traceback.format_exc())
         return make_error_response("internal_server_error", "An unexpected error occurred. Please check server logs for details.", 500)
@@ -295,17 +257,12 @@ def analyze_company_text():
 # --- 11. 速率限制与全局错误处理器 ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
-    """这个函数现在只处理我们自己设置的每日5次限制。"""
     print(f"Flask-Limiter rate limit triggered: {e.description}")
     message = get_rate_limit_message(request)
     return make_error_response("rate_limit_exceeded", message, 429)
 
 @app.errorhandler(500)
 def handle_internal_server_error(e):
-    """
-    捕获所有未处理的500内部服务器错误（作为终极安全网）。
-    这可以确保即使发生意外崩溃，也能返回带CORS头的JSON响应。
-    """
     print(f"!!! 全局500错误处理器被触发: {e} !!!")
     print(traceback.format_exc())
     error_message = "An unexpected internal server error occurred. The development team has been notified."
