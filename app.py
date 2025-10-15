@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 32.0 - 最终引擎升级版 (Gemini 2.5 Pro)
-# 描述: 1. (已实现) 修复了所有已知Bug (CORS, 搜索, 依赖库)。
-#       2. (本次更新) 根据用户提供的可用模型列表，将核心AI模型
-#          最终升级为最强大的 'models/gemini-2.5-pro'。
-#          这将为用户带来最顶级的分析体验。
+# 版本: 33.0 - RAG 引用与格式最终优化版
+# 描述: 1. (已实现) 修复了所有已知Bug，并升级引擎至 Gemini 2.5 Pro。
+#       2. (本次更新) 优化了 PROMPT_TEMPLATE，明确指示 AI 不要在报告
+#          正文中插入任何URL链接，只使用 [Source ID] 格式的引用标记。
+#       3. (本次更新) 彻底重写并修复了 replace_citations_with_links 函数。
+#          该函数现在不再向文本中注入链接，而是正确地将文本中的 [ID] 标记
+#          转换为前端可以解析和点击的 Markdown 链接格式 `[ID](#source-ID)`。
+#          这从根本上解决了引用格式混乱和部分引用无法点击的问题。
 # -----------------------------------------------------------------------------
 
 import os
@@ -68,11 +71,10 @@ def get_rate_limit_message(request):
         pass
     return messages.get(lang_code, messages['en'])
 
-# --- 5. 智能提取实体 (已升级模型) ---
+# --- 5. 智能提取实体 ---
 def extract_entities_with_ai(text_blob):
     print("🤖 启动AI实体提取程序 (模型: Gemini 2.5 Pro)...")
     try:
-        # [模型升级] 使用 'models/gemini-2.5-pro'
         model = genai.GenerativeModel('models/gemini-2.5-pro')
         prompt = (f'From the text below, extract the company name, job title, and location. Respond with a JSON object: {{"company_name": "...", "job_title": "...", "location": "..."}}.\nIf a value isn\'t found, return an empty string "".\n\nText:\n---\n{text_blob}\n---\n')
         response = model.generate_content(prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"))
@@ -115,13 +117,15 @@ def scrape_website_for_text(url):
     except Exception as e:
         print(f"❌ 爬取网站时发生错误: {e}"); return None
 
-# --- 8. 核心AI指令 ---
+# --- 8. 核心AI指令 (已优化) ---
 PROMPT_TEMPLATE = (
     "As 'Project Lens', an expert AI assistant, generate a detailed analysis report in {output_language} as a JSON object.\n"
     "**Citation Rules (VERY IMPORTANT):**\n"
-    "1. Cite information by embedding the corresponding source tag (e.g., `[1]`, `[2]`) provided in the `Research Data`.\n"
-    "2. **You MUST ONLY use the source IDs provided in the `Research Data` section. DO NOT invent, hallucinate, or create any source IDs that are not explicitly given to you.**\n"
-    "3. Include all genuinely used IDs in the final `cited_ids` array.\n"
+    "1. Cite information by embedding the corresponding source tag (e.g., `[1]`, `[2]`).\n"
+    "2. **NEVER include URLs directly in the report text.** Use only the source ID tags for citation.\n"
+    "3. **You MUST ONLY use the source IDs provided in the `Research Data` section. DO NOT invent, hallucinate, or create any source IDs that are not explicitly given to you.**\n"
+    "4. When multiple sources support a single point, cite them individually, like `[21], [22], [29], [30]`.\n"
+    "5. Include all genuinely used IDs in the final `cited_ids` array.\n"
     "**Information Provided:**\n"
     "1. **Company, Role & Location:** {company_name} - {job_title} in {location}\n"
     "2. **Current Date:** {current_date}\n"
@@ -133,7 +137,7 @@ PROMPT_TEMPLATE = (
     '  "report": {{\n'
     '    "company_location": "{location}",\n'
     '    "red_flag_status": "Your assessment (e.g., \'Low Risk\').",\n'
-    '    "red_flag_text": "Detailed explanation for red flags. Cite sources.",\n'
+    '    "red_flag_text": "Detailed explanation for red flags. Cite sources like [1] or [2], [3].",\n'
     '    "hiring_experience_text": "Analysis of hiring process. Cite sources.",\n'
     '    "timeliness_analysis": "1. Analyze info recency. 2. Analyze job posting status (e.g., \'Likely open\', \'Potentially expired\') and give a reason. Cite sources.",\n'
     '    "culture_fit": {{ "reputation": "", "management": "", "sustainability": "", "wlb": "", "growth": "", "salary": "", "overtime": "", "innovation": "", "benefits": "", "diversity": "", "training": "" }},\n'
@@ -147,7 +151,7 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-# --- 9. 引用净化与链接注入 ---
+# --- 9. 引用净化与链接注入 (已修复) ---
 def extract_all_mentioned_ids(report_data):
     all_text = json.dumps(report_data)
     found_ids = re.findall(r'\[(\d+)\]', all_text)
@@ -157,22 +161,26 @@ def scrub_invalid_citations(data, valid_ids_set):
     if isinstance(data, dict): return {k: scrub_invalid_citations(v, valid_ids_set) for k, v in data.items()}
     if isinstance(data, list): return [scrub_invalid_citations(elem, valid_ids_set) for elem in data]
     if isinstance(data, str):
+        # This function now only removes citations that are not in the valid set.
         return re.sub(r'\[(\d+)\]', lambda m: m.group(0) if int(m.group(1)) in valid_ids_set else "", data)
     return data
 
-def replace_citations_with_links(data, source_map):
-    if isinstance(data, dict): return {k: replace_citations_with_links(v, source_map) for k, v in data.items()}
-    if isinstance(data, list): return [replace_citations_with_links(elem, source_map) for elem in data]
+def replace_citations_with_links(data):
+    """
+    [RAG修复] 此函数现在将文本中的 [ID] 转换为可点击的 Markdown 锚点链接 `[ID](#source-ID)`。
+    这允许前端渲染可点击的引用，同时保持文本的清洁，不直接暴露URL。
+    """
+    if isinstance(data, dict):
+        return {k: replace_citations_with_links(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [replace_citations_with_links(elem) for elem in data]
     if isinstance(data, str):
-        def repl(match):
-            citation_id = int(match.group(1))
-            if citation_id in source_map and source_map[citation_id].get('link'):
-                return f'[{citation_id}]({source_map[citation_id]["link"]})'
-            return match.group(0)
-        return re.sub(r'\[(\d+)\]', repl, data)
+        # Replace [ID] with a Markdown link that points to an anchor on the page.
+        # The frontend will be responsible for creating these anchors (e.g., <div id="source-12">)
+        return re.sub(r'\[(\d+)\]', r'[\1](#source-\1)', data)
     return data
 
-# --- 10. API路由 ---
+# --- 10. API路由 (已更新) ---
 @app.route('/', methods=['GET'])
 def health_check():
     key_status = { "GEMINI_API_KEY": "配置成功" if GEMINI_API_KEY else "缺失", "SEARCH_API_KEY": "配置成功" if SEARCH_API_KEY else "缺失", "SEARCH_ENGINE_ID": "配置成功" if SEARCH_ENGINE_ID else "缺失" }
@@ -185,7 +193,7 @@ def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
     if not API_KEYS_CONFIGURED: return make_error_response("configuration_error", "一个或多个必需的API密钥未在服务器上配置。", 503)
 
-    print("--- v32.0 Final Engine (2.5 Pro) analysis request received! ---")
+    print("--- v33.0 RAG Fix analysis request received! ---")
     try:
         data = request.get_json()
         if not data: return make_error_response("invalid_json", "Request body is not valid JSON.", 400)
@@ -226,7 +234,6 @@ def analyze_company_text():
         full_prompt = PROMPT_TEMPLATE.format(output_language=language_instructions.get(lang_code, 'English'), company_name=company_name, job_title=job_title, location=location or "Not Specified", current_date=datetime.date.today().strftime("%Y-%m-%d"), resume_text=data.get('resumeText', 'No resume provided.'), context_with_sources="\n\n".join(context_blocks))
         
         try:
-            # [模型升级] 使用 'models/gemini-2.5-pro'
             model = genai.GenerativeModel('models/gemini-2.5-pro')
             safety_settings = { category: "BLOCK_NONE" for category in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]}
             response = model.generate_content(full_prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"), safety_settings=safety_settings)
@@ -240,10 +247,17 @@ def analyze_company_text():
         try:
             ai_json_response = json.loads(response.text)
             report_data = ai_json_response.get("report", {})
+            
+            # --- RAG 修复逻辑 ---
+            # 1. 提取所有AI提到的引用ID
             all_mentioned_ids = extract_all_mentioned_ids(report_data)
+            # 2. 确保这些ID是我们提供给AI的有效ID
             valid_ids_set = all_mentioned_ids.intersection(source_map.keys())
+            # 3. 移除报告中所有无效的引用标记 (防止AI“幻觉”出引用)
             scrubbed_report_data = scrub_invalid_citations(report_data, valid_ids_set)
-            linked_report_data = replace_citations_with_links(scrubbed_report_data, source_map)
+            # 4. 将有效的 [ID] 标记转换为可点击的 Markdown 锚点链接
+            linked_report_data = replace_citations_with_links(scrubbed_report_data)
+
         except json.JSONDecodeError:
             return make_error_response("ai_malformed_json", "AI failed to generate a valid JSON report.", 500)
 
