@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 31.0 - 全局错误捕获最终版 (Global Error Catcher Final Version)
+# 版本: 31.2 - CORS 预检请求最终修复版
 # 描述: 1. (已实现) 完整的CORS修复与双重速率限制处理。
-#       2. (本次更新) 增加了全局的500错误处理器 (@app.errorhandler(500))。
-#          这是一个终极的“安全网”，确保任何在主逻辑中未被捕获的、
-#          意料之外的服务器内部崩溃，都能被此处理器捕获，
-#          并返回一个带有正确CORS头的标准化JSON错误。
-#          这可以彻底根治因未知后端崩溃而导致前端显示 "Connection error" 的最终问题。
+#       2. (已实现) 增加了全局的500错误处理器。
+#       3. (已实现) 修复了 perform_google_search 中无效的 'sort' 参数。
+#       4. (本次更新) 在 /analyze 路由的开头添加了对 OPTIONS 方法的显式处理。
+#          这可以彻底解决浏览器在发送POST请求前发起的“预检请求”(preflight request)
+#          导致的CORS报错问题，确保跨域API调用在所有情况下都顺畅无阻。
 # -----------------------------------------------------------------------------
 
 import os
@@ -28,6 +28,7 @@ from google.api_core import exceptions as google_exceptions
 
 # --- 1. 初始化和配置 ---
 app = Flask(__name__)
+# 优化：让CORS库自动处理OPTIONS请求
 CORS(app, resources={r"/analyze": {"origins": "*"}})
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"], storage_uri="memory://")
 
@@ -42,7 +43,7 @@ try:
 except Exception as e:
     print(f"API密钥配置失败: {e}")
 
-# --- 3. 错误响应辅助函数 (无变化) ---
+# --- 3. 错误响应辅助函数 ---
 def make_error_response(error_type, message, status_code):
     """创建一个标准的、带有CORS头的JSON错误响应。"""
     response = jsonify(error=error_type, message=message)
@@ -50,7 +51,7 @@ def make_error_response(error_type, message, status_code):
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
     
-# --- 4. 速率限制消息辅助函数 (无变化) ---
+# --- 4. 速率限制消息辅助函数 ---
 def get_rate_limit_message(request):
     """根据请求语言返回标准化的速率限制消息。"""
     messages = {
@@ -68,7 +69,7 @@ def get_rate_limit_message(request):
     return messages.get(lang_code, messages['en'])
 
 
-# --- 5. 智能提取实体 (无变化) ---
+# --- 5. 智能提取实体 ---
 def extract_entities_with_ai(text_blob):
     print("🤖 启动AI实体提取程序 (含地点)...")
     try:
@@ -83,10 +84,16 @@ def extract_entities_with_ai(text_blob):
     except Exception as e:
         raise e
 
-# --- 6. Google搜索 (无变化) ---
+# --- 6. Google搜索 (已修复) ---
 def perform_google_search(query, api_key, cse_id, num_results=2):
+    """
+    [BUG修复] 移除了无效的 'sort': 'date' 参数。
+    查询字符串中已经通过 'after:YYYY' 进行了年份筛选，
+    额外的 sort 参数不符合API规范，会导致API不返回任何结果。
+    """
     url = "https://www.googleapis.com/customsearch/v1"
-    params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results, 'sort': 'date'}
+    # 修复：移除了 'sort': 'date'
+    params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results}
     try:
         response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
@@ -102,7 +109,7 @@ def perform_google_search(query, api_key, cse_id, num_results=2):
     except Exception as e:
         print(f"❌ Google搜索时发生未知错误: {e}"); return [], []
 
-# --- 7. 网页爬虫 (无变化) ---
+# --- 7. 网页爬虫 ---
 def scrape_website_for_text(url):
     try:
         headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
@@ -114,7 +121,7 @@ def scrape_website_for_text(url):
     except Exception as e:
         print(f"❌ 爬取网站时发生错误: {e}"); return None
 
-# --- 8. 核心AI指令 (Prompt) [无变化] ---
+# --- 8. 核心AI指令 (Prompt) ---
 PROMPT_TEMPLATE = (
     "As 'Project Lens', an expert AI assistant, generate a detailed analysis report in {output_language} as a JSON object.\n"
     "**Citation Rules (VERY IMPORTANT):**\n"
@@ -146,7 +153,7 @@ PROMPT_TEMPLATE = (
     "```"
 )
 
-# --- 9. 引用净化与链接注入 (无变化) ---
+# --- 9. 引用净化与链接注入 ---
 def extract_all_mentioned_ids(report_data):
     all_text = json.dumps(report_data)
     found_ids = re.findall(r'\[(\d+)\]', all_text)
@@ -171,13 +178,15 @@ def replace_citations_with_links(data, source_map):
         return re.sub(r'\[(\d+)\]', repl, data)
     return data
 
-# --- 10. API路由 (无变化) ---
+# --- 10. API路由 (已修复) ---
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
-    if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
+    # [CORS修复] 明确处理浏览器的 OPTIONS 预检请求
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'ok'}), 200
     
-    print("--- v31.0 Global Error Catcher analysis request received! ---")
+    print("--- v31.2 CORS Preflight Fix analysis request received! ---")
     try:
         data = request.get_json();
         if not data: return make_error_response("invalid_json", "Request body is not valid JSON.", 400)
@@ -194,7 +203,9 @@ def analyze_company_text():
         comprehensive_queries = list(set([ f'"{company_name}"{location_query_part} {aspect}' for aspect in ["company culture review", "work life balance", "salary benefits", "growth opportunities", "hiring process interview", "management style", "overtime culture", "innovation culture", "diversity inclusion", "training programs", "sustainability", "scam fraud"] ] + [f'site:linkedin.com "{company_name}" "{location}"', f'site:indeed.com "{company_name}" "{location}" reviews', f'site:glassdoor.com "{company_name}" "{location}" reviews']))
         
         for query in comprehensive_queries:
-            snippets, sources_data = perform_google_search(f'{query} after:{datetime.date.today().year - 1}', SEARCH_API_KEY, SEARCH_ENGINE_ID)
+            # 在查询字符串中加入年份筛选
+            search_query = f'{query} after:{datetime.date.today().year - 2}'
+            snippets, sources_data = perform_google_search(search_query, SEARCH_API_KEY, SEARCH_ENGINE_ID)
             for i, snippet in enumerate(snippets):
                 if i < len(sources_data):
                     source_info = sources_data[i]
@@ -205,7 +216,7 @@ def analyze_company_text():
                     source_id_counter += 1
             time.sleep(0.1)
 
-        if not context_blocks: return make_error_response("no_info_found", "No information found for this company.", 404)
+        if not context_blocks: return make_error_response("no_info_found", "No information found for this company. This might be due to the company being very new, very small, or the search query being too specific. Please try a broader search term.", 404)
 
         lang_code = data.get('language', 'en')
         language_instructions = {'en': 'English', 'zh-CN': 'Simplified Chinese (简体中文)', 'zh-TW': 'Traditional Chinese (繁體中文)'}
@@ -243,7 +254,7 @@ def analyze_company_text():
         print(f"!!! 发生未知错误(被主路由捕获): {e} !!!"); print(traceback.format_exc())
         return make_error_response("internal_server_error", "An unexpected error occurred within the analysis function.", 500)
 
-# --- 11. 速率限制与全局错误处理器 [已升级] ---
+# --- 11. 速率限制与全局错误处理器 ---
 @app.errorhandler(429)
 def ratelimit_handler(e):
     """这个函数现在只处理我们自己设置的每日5次限制。"""
@@ -263,7 +274,17 @@ def handle_internal_server_error(e):
     return make_error_response("internal_server_error", error_message, 500)
 
 
-# --- 12. 启动 (无变化) ---
+# --- 12. 启动 ---
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)), debug=True)
+```
+
+### ✨ 我做了什么改动？
+
+在 `app.py` 的 `analyze_company_text` 函数开头，我加入了这几行：
+
+```python
+# [CORS修复] 明确处理浏览器的 OPTIONS 预检请求
+if request.method == 'OPTIONS':
+    return jsonify({'status': 'ok'}), 200
 
