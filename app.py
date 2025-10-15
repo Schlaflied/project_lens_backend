@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 31.2 - CORS 预检请求最终修复版
-# 描述: 1. (已实现) 完整的CORS修复与双重速率限制处理。
-#       2. (已实现) 增加了全局的500错误处理器。
-#       3. (已实现) 修复了 perform_google_search 中无效的 'sort' 参数。
-#       4. (本次更新) 在 /analyze 路由的开头添加了对 OPTIONS 方法的显式处理。
-#          这可以彻底解决浏览器在发送POST请求前发起的“预检请求”(preflight request)
-#          导致的CORS报错问题，确保跨域API调用在所有情况下都顺畅无阻。
+# 版本: 31.3 - 健康检查与环境变量诊断版
+# 描述: 1. (已实现) 修复了CORS、搜索参数等核心功能Bug。
+#       2. (本次更新) 增加了一个根路由'/'的健康检查端点。
+#          现在直接访问后端URL会返回一个JSON，明确显示服务的运行状态
+#          以及三个关键API密钥是否已成功加载。这使得诊断部署时
+#          的环境变量问题变得极其简单直观，能从根本上解决
+#          因密钥缺失导致服务崩溃而前端显示 "Connection Error" 的问题。
 # -----------------------------------------------------------------------------
 
 import os
@@ -28,20 +28,25 @@ from google.api_core import exceptions as google_exceptions
 
 # --- 1. 初始化和配置 ---
 app = Flask(__name__)
-# 优化：让CORS库自动处理OPTIONS请求
-CORS(app, resources={r"/analyze": {"origins": "*"}})
+CORS(app, resources={r"/*": {"origins": "*"}}) # 允许所有路由的CORS
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"], storage_uri="memory://")
 
 # --- 2. API密钥配置 ---
+# 将密钥加载移到全局作用域，方便健康检查函数访问
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+SEARCH_API_KEY = os.getenv("SEARCH_API_KEY")
+SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
+API_KEYS_CONFIGURED = all([GEMINI_API_KEY, SEARCH_API_KEY, SEARCH_ENGINE_ID])
+
 try:
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    SEARCH_API_KEY = os.getenv("SEARCH_API_KEY")
-    SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
-    if not all([GEMINI_API_KEY, SEARCH_API_KEY, SEARCH_ENGINE_ID]): raise ValueError("API密钥缺失")
-    genai.configure(api_key=GEMINI_API_KEY)
-    print("API密钥配置成功！")
+    if API_KEYS_CONFIGURED:
+        genai.configure(api_key=GEMINI_API_KEY)
+        print("✅ API密钥配置成功！服务已准备就绪。")
+    else:
+        print("⚠️ 警告：一个或多个API密钥环境变量未设置。服务将以受限模式运行，/analyze 端点将不可用。")
 except Exception as e:
-    print(f"API密钥配置失败: {e}")
+    API_KEYS_CONFIGURED = False
+    print(f"❌ API密钥配置失败: {e}")
 
 # --- 3. 错误响应辅助函数 ---
 def make_error_response(error_type, message, status_code):
@@ -56,7 +61,7 @@ def get_rate_limit_message(request):
     """根据请求语言返回标准化的速率限制消息。"""
     messages = {
         'zh-CN': "开拓者，你已经用完了今日的额度。🚀 Project Lens每天为用户提供五次免费公司查询，如果你是重度用户，通过订阅Pro（Coming Soon）或者请我喝杯咖啡☕️来重置查询次数。",
-        'zh-TW': "開拓者，你已經用完了今日的額度。🚀 Project Lens每天為用戶提供五次免費公司查詢，如果你是重度用戶，通過訂閱Pro（Coming Soon）或者請我喝杯咖啡☕️來重置查詢次數。",
+        'zh-TW': "開拓者，你已經用完了今日的額度。🚀 Project Lens每天為用户提供五次免費公司查詢，如果你是重度用戶，通過訂閱Pro（Coming Soon）或者請我喝杯咖啡☕️來重置查詢次數。",
         'en': "Explorer, you have used up your free analysis quota for today. 🚀 Project Lens provides five free company analyses per day. If you're a heavy user, you can reset your query count by subscribing to Pro (Coming Soon) or by buying me a coffee ☕️."
     }
     lang_code = 'en'
@@ -178,14 +183,37 @@ def replace_citations_with_links(data, source_map):
         return re.sub(r'\[(\d+)\]', repl, data)
     return data
 
-# --- 10. API路由 (已修复) ---
-@app.route('/analyze', methods=['POST'])
+# --- 10. API路由 ---
+
+# [新增] 健康检查端点
+@app.route('/', methods=['GET'])
+def health_check():
+    """提供一个简单的健康检查端点来验证服务是否在线和API密钥是否配置。"""
+    key_status = {
+        "GEMINI_API_KEY": "配置成功" if GEMINI_API_KEY else "缺失",
+        "SEARCH_API_KEY": "配置成功" if SEARCH_API_KEY else "缺失",
+        "SEARCH_ENGINE_ID": "配置成功" if SEARCH_ENGINE_ID else "缺失"
+    }
+    status_message = "服务运行正常" if all([GEMINI_API_KEY, SEARCH_API_KEY, SEARCH_ENGINE_ID]) else "警告：API密钥配置不完整，核心功能将无法使用"
+    
+    return jsonify({
+        "service_name": "Project Lens Backend",
+        "status": status_message,
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "api_keys_status": key_status
+    }), 200
+
+@app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
 def analyze_company_text():
-    # [CORS修复] Flask-CORS扩展会自动处理OPTIONS预检请求。
-    # 从路由中移除'OPTIONS'并删除手动处理，可以确保CORS正常工作，并避免对预检请求进行速率限制。
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'ok'}), 200
     
-    print("--- v31.2 CORS Preflight Fix analysis request received! ---")
+    # 在处理请求前，再次检查密钥
+    if not API_KEYS_CONFIGURED:
+        return make_error_response("configuration_error", "一个或多个必需的API密钥未在服务器上配置。", 503) # 503 Service Unavailable
+
+    print("--- v31.3 Health Check analysis request received! ---")
     try:
         data = request.get_json();
         if not data: return make_error_response("invalid_json", "Request body is not valid JSON.", 400)
@@ -276,14 +304,4 @@ def handle_internal_server_error(e):
 # --- 12. 启动 ---
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)), debug=True)
-```
-
-### ✨ 我做了什么改动？
-
-在 `app.py` 的 `analyze_company_text` 函数开头，我加入了这几行：
-
-```python
-# [CORS修复] 明确处理浏览器的 OPTIONS 预检请求
-if request.method == 'OPTIONS':
-    return jsonify({'status': 'ok'}), 200
 
