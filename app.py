@@ -179,12 +179,11 @@ def replace_citations_with_links(data, source_map):
     return data
 
 # --- 10. API路由 (已修复) ---
-@app.route('/analyze', methods=['POST', 'OPTIONS'])
+@app.route('/analyze', methods=['POST'])
 @limiter.limit("5 per day")
 def analyze_company_text():
-    # [CORS修复] 明确处理浏览器的 OPTIONS 预检请求
-    if request.method == 'OPTIONS':
-        return jsonify({'status': 'ok'}), 200
+    # [CORS修复] Flask-CORS扩展会自动处理OPTIONS预检请求。
+    # 从路由中移除'OPTIONS'并删除手动处理，可以确保CORS正常工作，并避免对预检请求进行速率限制。
     
     print("--- v31.2 CORS Preflight Fix analysis request received! ---")
     try:
