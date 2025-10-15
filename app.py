@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 31.3 - 健康检查与环境变量诊断版
-# 描述: 1. (已实现) 修复了CORS、搜索参数等核心功能Bug。
-#       2. (本次更新) 增加了一个根路由'/'的健康检查端点。
-#          现在直接访问后端URL会返回一个JSON，明确显示服务的运行状态
-#          以及三个关键API密钥是否已成功加载。这使得诊断部署时
-#          的环境变量问题变得极其简单直观，能从根本上解决
-#          因密钥缺失导致服务崩溃而前端显示 "Connection Error" 的问题。
+# 版本: 31.4 - 详细错误诊断版
+# 描述: 1. (已实现) 修复了CORS、搜索参数等核心功能Bug，并增加了健康检查。
+#       2. (本次更新) 在'analyze'函数内部增加了更详细的try-except块，
+#          分别包裹了两个关键的Gemini API调用。现在如果其中任何一个环节
+#          失败，前端将收到一个更具体的错误信息（例如 "ai_entity_extraction_error"），
+#          而不是一个笼统的 "internal_server_error"，极大地简化了远程调试的难度。
 # -----------------------------------------------------------------------------
 
 import os
@@ -209,19 +208,27 @@ def analyze_company_text():
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'}), 200
     
-    # 在处理请求前，再次检查密钥
     if not API_KEYS_CONFIGURED:
-        return make_error_response("configuration_error", "一个或多个必需的API密钥未在服务器上配置。", 503) # 503 Service Unavailable
+        return make_error_response("configuration_error", "一个或多个必需的API密钥未在服务器上配置。", 503)
 
-    print("--- v31.3 Health Check analysis request received! ---")
+    print("--- v31.4 Detailed Diag analysis request received! ---")
+    
+    # [BUG修复] 将整个主逻辑包裹在一个大的try-except中，但内部增加了更详细的错误捕获
     try:
-        data = request.get_json();
+        data = request.get_json()
         if not data: return make_error_response("invalid_json", "Request body is not valid JSON.", 400)
 
         smart_paste_content = data.get('companyName')
         if not smart_paste_content: return make_error_response("missing_parameter", "Company name is required.", 400)
         
-        company_name, job_title, location = extract_entities_with_ai(smart_paste_content)
+        # 详细诊断点 1: 实体提取
+        try:
+            company_name, job_title, location = extract_entities_with_ai(smart_paste_content)
+        except Exception as e:
+            print(f"!!! 实体提取AI调用失败: {e} !!!"); print(traceback.format_exc())
+            error_message = f"AI entity extraction failed. Error: {type(e).__name__}. This might be a problem with the Generative Language API permissions or billing."
+            return make_error_response("ai_entity_extraction_error", error_message, 500)
+
         if not company_name: return make_error_response("entity_extraction_failed", "Could not identify company name from input.", 400)
 
         context_blocks, source_map, source_id_counter = [], {}, 1
@@ -230,7 +237,6 @@ def analyze_company_text():
         comprehensive_queries = list(set([ f'"{company_name}"{location_query_part} {aspect}' for aspect in ["company culture review", "work life balance", "salary benefits", "growth opportunities", "hiring process interview", "management style", "overtime culture", "innovation culture", "diversity inclusion", "training programs", "sustainability", "scam fraud"] ] + [f'site:linkedin.com "{company_name}" "{location}"', f'site:indeed.com "{company_name}" "{location}" reviews', f'site:glassdoor.com "{company_name}" "{location}" reviews']))
         
         for query in comprehensive_queries:
-            # 在查询字符串中加入年份筛选
             search_query = f'{query} after:{datetime.date.today().year - 2}'
             snippets, sources_data = perform_google_search(search_query, SEARCH_API_KEY, SEARCH_ENGINE_ID)
             for i, snippet in enumerate(snippets):
@@ -247,12 +253,17 @@ def analyze_company_text():
 
         lang_code = data.get('language', 'en')
         language_instructions = {'en': 'English', 'zh-CN': 'Simplified Chinese (简体中文)', 'zh-TW': 'Traditional Chinese (繁體中文)'}
-        
         full_prompt = PROMPT_TEMPLATE.format(output_language=language_instructions.get(lang_code, 'English'), company_name=company_name, job_title=job_title, location=location or "Not Specified", current_date=datetime.date.today().strftime("%Y-%m-%d"), resume_text=data.get('resumeText', 'No resume provided.'), context_with_sources="\n\n".join(context_blocks))
         
-        model = genai.GenerativeModel('gemini-pro')
-        safety_settings = { category: "BLOCK_NONE" for category in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]}
-        response = model.generate_content(full_prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"), safety_settings=safety_settings)
+        # 详细诊断点 2: 核心分析
+        try:
+            model = genai.GenerativeModel('gemini-pro')
+            safety_settings = { category: "BLOCK_NONE" for category in ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"]}
+            response = model.generate_content(full_prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"), safety_settings=safety_settings)
+        except Exception as e:
+            print(f"!!! 核心分析AI调用失败: {e} !!!"); print(traceback.format_exc())
+            error_message = f"Main AI analysis call failed. Error: {type(e).__name__}. This could be due to API permissions, billing, or an issue with the content sent for analysis."
+            return make_error_response("ai_analysis_error", error_message, 500)
         
         if not response.parts: return make_error_response("ai_response_blocked", "AI content generation was blocked by safety settings.", 500)
 
@@ -279,7 +290,7 @@ def analyze_company_text():
         return make_error_response("gemini_permission_denied", error_message, 500)
     except Exception as e:
         print(f"!!! 发生未知错误(被主路由捕获): {e} !!!"); print(traceback.format_exc())
-        return make_error_response("internal_server_error", "An unexpected error occurred within the analysis function.", 500)
+        return make_error_response("internal_server_error", "An unexpected error occurred. Please check server logs for details.", 500)
 
 # --- 11. 速率限制与全局错误处理器 ---
 @app.errorhandler(429)
