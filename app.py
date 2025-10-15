@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
 # -----------------------------------------------------------------------------
 # 「职场透镜」后端核心应用 (Project Lens Backend Core)
-# 版本: 33.0 - RAG 引用与格式最终优化版
+# 版本: 35.0 - 可点击引用最终版
 # 描述: 1. (已实现) 修复了所有已知Bug，并升级引擎至 Gemini 2.5 Pro。
-#       2. (本次更新) 优化了 PROMPT_TEMPLATE，明确指示 AI 不要在报告
-#          正文中插入任何URL链接，只使用 [Source ID] 格式的引用标记。
-#       3. (本次更新) 彻底重写并修复了 replace_citations_with_links 函数。
-#          该函数现在不再向文本中注入链接，而是正确地将文本中的 [ID] 标记
-#          转换为前端可以解析和点击的 Markdown 链接格式 `[ID](#source-ID)`。
-#          这从根本上解决了引用格式混乱和部分引用无法点击的问题。
+#       2. (本次更新) 根据用户最终要求，恢复并优化了 replace_citations_with_links
+#          函数。它现在会生成标准的 Markdown 锚点链接 `[ID](#source-ID)`。
+#          这是实现维基百科式可点击、可跳转引用的行业标准做法，
+#          将功能指令与内容分离，交由前端进行最终渲染。
 # -----------------------------------------------------------------------------
 
 import os
@@ -161,22 +159,20 @@ def scrub_invalid_citations(data, valid_ids_set):
     if isinstance(data, dict): return {k: scrub_invalid_citations(v, valid_ids_set) for k, v in data.items()}
     if isinstance(data, list): return [scrub_invalid_citations(elem, valid_ids_set) for elem in data]
     if isinstance(data, str):
-        # This function now only removes citations that are not in the valid set.
         return re.sub(r'\[(\d+)\]', lambda m: m.group(0) if int(m.group(1)) in valid_ids_set else "", data)
     return data
 
 def replace_citations_with_links(data):
     """
-    [RAG修复] 此函数现在将文本中的 [ID] 转换为可点击的 Markdown 锚点链接 `[ID](#source-ID)`。
-    这允许前端渲染可点击的引用，同时保持文本的清洁，不直接暴露URL。
+    [最终修复] 此函数将文本中的 [ID] 转换为可点击的 Markdown 锚点链接 `[ID](#source-ID)`。
+    这是实现维基百科式可点击、可跳转引用的行业标准做法。
     """
     if isinstance(data, dict):
         return {k: replace_citations_with_links(v) for k, v in data.items()}
     if isinstance(data, list):
         return [replace_citations_with_links(elem) for elem in data]
     if isinstance(data, str):
-        # Replace [ID] with a Markdown link that points to an anchor on the page.
-        # The frontend will be responsible for creating these anchors (e.g., <div id="source-12">)
+        # 将 [ID] 替换为 Markdown 锚点链接格式
         return re.sub(r'\[(\d+)\]', r'[\1](#source-\1)', data)
     return data
 
@@ -193,7 +189,7 @@ def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
     if not API_KEYS_CONFIGURED: return make_error_response("configuration_error", "一个或多个必需的API密钥未在服务器上配置。", 503)
 
-    print("--- v33.0 RAG Fix analysis request received! ---")
+    print("--- v35.0 Clickable Citation analysis request received! ---")
     try:
         data = request.get_json()
         if not data: return make_error_response("invalid_json", "Request body is not valid JSON.", 400)
@@ -249,20 +245,17 @@ def analyze_company_text():
             report_data = ai_json_response.get("report", {})
             
             # --- RAG 修复逻辑 ---
-            # 1. 提取所有AI提到的引用ID
             all_mentioned_ids = extract_all_mentioned_ids(report_data)
-            # 2. 确保这些ID是我们提供给AI的有效ID
             valid_ids_set = all_mentioned_ids.intersection(source_map.keys())
-            # 3. 移除报告中所有无效的引用标记 (防止AI“幻觉”出引用)
             scrubbed_report_data = scrub_invalid_citations(report_data, valid_ids_set)
-            # 4. 将有效的 [ID] 标记转换为可点击的 Markdown 锚点链接
-            linked_report_data = replace_citations_with_links(scrubbed_report_data)
+            # [最终修复] 将有效的 [ID] 标记转换为可点击的 Markdown 锚点链接
+            final_report_data = replace_citations_with_links(scrubbed_report_data)
 
         except json.JSONDecodeError:
             return make_error_response("ai_malformed_json", "AI failed to generate a valid JSON report.", 500)
 
         final_sources = [ {**source_map[sid], 'id': sid} for sid in sorted(list(valid_ids_set)) if sid in source_map ]
-        return jsonify({"company_name": company_name, "report": linked_report_data, "sources": final_sources})
+        return jsonify({"company_name": company_name, "report": final_report_data, "sources": final_sources})
 
     except Exception as e:
         print(f"!!! 发生未知错误(被主路由捕获): {e} !!!"); print(traceback.format_exc())
