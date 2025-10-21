@@ -88,20 +88,25 @@ def extract_entities_with_ai(text_blob):
 def perform_google_search(query, api_key, cse_id, num_results=2):
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results}
+    print(f"🔍 正在执行Google搜索: 查询='{query}', 参数={params})
     try:
         response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
         search_results = response.json()
+        print(f"✅ Google搜索API响应: 查询='{query}', 结果={json.dumps(search_results, ensure_ascii=False, indent=2)})
+
         if 'items' not in search_results:
-            print(f"⚠️ Google搜索成功但没有结果: 查询='{query}'")
+            print(f"⚠️ Google搜索成功但没有结果: 查询='{query}")
             return [], []
         snippets = [item.get('snippet', '') for item in search_results.get('items', [])]
         sources = [{'title': item.get('title'), 'link': item.get('link')} for item in search_results.get('items', [])]
         return snippets, sources
     except requests.exceptions.RequestException as e:
-        print(f"❌ Google搜索请求失败: {e}"); return [], []
+        print(f"❌ Google搜索请求失败: 查询='{query}', 错误={e}")
+        return [], []
     except Exception as e:
-        print(f"❌ Google搜索时发生未知错误: {e}"); return [], []
+        print(f"❌ Google搜索时发生未知错误: 查询='{query}', 错误={e}")
+        return [], []
 
 # --- 7. 网页爬虫 ---
 def scrape_website_for_text(url):
