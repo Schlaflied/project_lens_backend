@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 Flask==2.3.3
 Werkzeug==2.3.7
 gunicorn
@@ -8,15 +7,3 @@ Flask-Cors
 requests
 beautifulsoup4
 Flask-Limiter
-=======
-Flask==2.3.3
-Werkzeug==2.3.7
-gunicorn
-python-dotenv
-google-generativeai
-Flask-Cors
-requests
-beautifulsoup4
-Flask-Limiter
-
->>>>>>> d81ee58c85c868164b512c80a62e3c69b9a6c1b4
