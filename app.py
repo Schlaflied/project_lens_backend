@@ -116,40 +116,38 @@ def scrape_website_for_text(url):
         print(f"❌ 爬取网站时发生错误: {e}"); return None
 
 # --- 8. 核心AI指令 (已优化) ---
-PROMPT_TEMPLATE = (
-    "As 'Project Lens', an expert AI assistant, generate a detailed analysis report in {output_language} as a JSON object.\n"
-    "**Citation Rules (VERY IMPORTANT):**\n"
-    "1. Cite information by embedding the corresponding source tag (e.g., `[1]`, `[2]`).\n"
-    "2. **NEVER include URLs directly in the report text.** Use only the source ID tags for citation.\n"
-    "3. **You MUST ONLY use the source IDs provided in the `Research Data` section. DO NOT invent, hallucinate, or create any source IDs that are not explicitly given to you.**\n"
-    "4. When multiple sources support a single point, cite them individually, like `[21], [22], [29], [30]`.\n"
-    "5. Include all genuinely used IDs in the final `cited_ids` array.\n"
-    "**Information Provided:**\n"
-    "1. **Company, Role & Location:** {company_name} - {job_title} in {location}\n"
-    "2. **Current Date:** {current_date}\n"
-    "3. **Applicant's Resume/Bio:**\n   ```{resume_text}```\n"
-    "4. **Research Data (Each block has a `[Source ID: X]`):**\n   ```{context_with_sources}```\n"
-    "**Your Task:** Synthesize all info into a single JSON object with the following structure:\n"
-    "```json\n"
-    "{{\n"
-    '  "report": {{\n'
-    '    "company_location": "{location}",\n'
-    '    "red_flag_status": "Your assessment (e.g., \'Low Risk\').",\n'
-    '    "red_flag_text": "Detailed explanation for red flags. Cite sources like [1] or [2], [3].",\n'
-    '    "hiring_experience_text": "Analysis of hiring process. Cite sources.",\n'
-    '    "timeliness_analysis": "1. Analyze info recency. 2. Analyze job posting status (e.g., \'Likely open\', \'Potentially expired\') and give a reason. Cite sources.",\n'
-    '    "culture_fit": {{ "reputation": "", "management": "", "sustainability": "", "wlb": "", "growth": "", "salary": "", "overtime": "", "innovation": "", "benefits": "", "diversity": "", "training": "" }},
-',
-    '    "value_match_score": "A number from 0-100. 0 if no resume.",\n'
-    '    "value_match_text": "Explanation of the match score. Cite sources.",\n'
-    '    "final_risk_rating": "Your final risk rating.",\n'
-    '    "final_risk_text": "Summary justifying the final rating. Cite sources."
-'    '  }},\n'
-'  "cited_ids": []\n'
-    "}}
-"
-    "```"
-)
+PROMPT_TEMPLATE = """As 'Project Lens', an expert AI assistant, generate a detailed analysis report in {output_language} as a JSON object.
+**Citation Rules (VERY IMPORTANT):**
+1. Cite information by embedding the corresponding source tag (e.g., `[1]`, `[2]`).
+2. **NEVER include URLs directly in the report text.** Use only the source ID tags for citation.
+3. **You MUST ONLY use the source IDs provided in the `Research Data` section. DO NOT invent, hallucinate, or create any source IDs that are not explicitly given to you.**
+4. When multiple sources support a single point, cite them individually, like `[21], [22], [29], [30]`.
+5. Include all genuinely used IDs in the final `cited_ids` array.
+**Information Provided:**
+1. **Company, Role & Location:** {company_name} - {job_title} in {location}
+2. **Current Date:** {current_date}
+3. **Applicant's Resume/Bio:**
+   ```{resume_text}```
+4. **Research Data (Each block has a `[Source ID: X]`):**
+   ```{context_with_sources}```
+**Your Task:** Synthesize all info into a single JSON object with the following structure:
+```json
+{{
+  "report": {{
+    "company_location": "{location}",
+    "red_flag_status": "Your assessment (e.g., 'Low Risk').",
+    "red_flag_text": "Detailed explanation for red flags. Cite sources like [1] or [2], [3].",
+    "hiring_experience_text": "Analysis of hiring process. Cite sources.",
+    "timeliness_analysis": "1. Analyze info recency. 2. Analyze job posting status (e.g., 'Likely open', 'Potentially expired') and give a reason. Cite sources.",
+    "culture_fit": {{ "reputation": "", "management": "", "sustainability": "", "wlb": "", "growth": "", "salary": "", "overtime": "", "innovation": "", "benefits": "", "diversity": "", "training": "" }},
+    "value_match_score": "A number from 0-100. 0 if no resume.",
+    "value_match_text": "Explanation of the match score. Cite sources.",
+    "final_risk_rating": "Your final risk rating.",
+    "final_risk_text": "Summary justifying the final rating. Cite sources."
+  }},
+  "cited_ids": []
+}}
+```"""
 
 # --- 9. 引用净化与链接注入 (已修复) ---
 def extract_all_mentioned_ids(report_data):
