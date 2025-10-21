@@ -74,7 +74,14 @@ def extract_entities_with_ai(text_blob):
     print("🤖 启动AI实体提取程序 (模型: Gemini 2.5 Pro)...")
     try:
         model = genai.GenerativeModel('models/gemini-2.5-pro')
-        prompt = (f'From the text below, extract the company name, job title, and location. Respond with a JSON object: {{"company_name": "...", "job_title": "...", "location": "..."}}.\nIf a value isn\'t found, return an empty string "".\n\nText:\n---\n{text_blob}\n---\n')
+        prompt = f"""From the text below, extract the company name, job title, and location. Respond with a JSON object: {{"company_name": "...", "job_title": "...", "location": "..."}}.
+If a value isn't found, return an empty string "".
+
+Text:
+---
+{text_blob}
+---
+"""
         response = model.generate_content(prompt, generation_config=genai.GenerationConfig(response_mime_type="application/json"))
         if not response.parts: print(f"--- 实体提取AI响应被阻止: {response.prompt_feedback} ---"); return text_blob, "", ""
         entities = json.loads(response.text)
@@ -88,7 +95,7 @@ def extract_entities_with_ai(text_blob):
 def perform_google_search(query, api_key, cse_id, num_results=2):
     url = "https://www.googleapis.com/customsearch/v1"
     params = {'key': api_key, 'cx': cse_id, 'q': query, 'num': num_results}
-    print(f"🔍 正在执行Google搜索: 查询='{query}', 参数={params})
+    print(f"🔍 正在执行Google搜索: 查询='{query}', 参数={params})") # Debug log
     try:
         response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
