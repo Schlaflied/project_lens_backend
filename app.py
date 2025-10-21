@@ -28,7 +28,7 @@ from google.api_core import exceptions as google_exceptions
 # --- 1. 初始化和配置 ---
 app = Flask(__name__)
 CORS(app)
-limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"], storage_uri="memory://")
+limiter = Limiter(get_remote_address, app=app, default_limits=["10 per day"], storage_uri="memory://")
 
 # --- 2. API密钥配置 ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
