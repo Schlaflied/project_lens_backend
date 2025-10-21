@@ -139,7 +139,7 @@ PROMPT_TEMPLATE = (
     '    "hiring_experience_text": "Analysis of hiring process. Cite sources.",\n'
     '    "timeliness_analysis": "1. Analyze info recency. 2. Analyze job posting status (e.g., \'Likely open\', \'Potentially expired\') and give a reason. Cite sources.",\n'
     '    "culture_fit": {{ "reputation": "", "management": "", "sustainability": "", "wlb": "", "growth": "", "salary": "", "overtime": "", "innovation": "", "benefits": "", "diversity": "", "training": "" }},
-'
+',
     '    "value_match_score": "A number from 0-100. 0 if no resume.",\n'
     '    "value_match_text": "Explanation of the match score. Cite sources.",\n'
     '    "final_risk_rating": "Your final risk rating.",\n'
