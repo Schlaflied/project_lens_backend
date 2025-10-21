@@ -100,7 +100,7 @@ def perform_google_search(query, api_key, cse_id, num_results=2):
         response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
         search_results = response.json()
-        print(f"✅ Google搜索API响应: 查询='{query}', 结果={json.dumps(search_results, ensure_ascii=False, indent=2)})
+        print(f"✅ Google搜索API响应: 查询='{query}', 结果={json.dumps(search_results, ensure_ascii=False, indent=2)})") # Debug log
 
         if 'items' not in search_results:
             print(f"⚠️ Google搜索成功但没有结果: 查询='{query}")
