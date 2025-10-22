@@ -268,6 +268,7 @@ def analyze_company_text():
             final_report_data = replace_citations_with_links(scrubbed_report_data)
 
         except json.JSONDecodeError:
+            print(f"!!! AI returned malformed JSON: {response.text} !!!") # Log the raw response
             return make_error_response("ai_malformed_json", "AI failed to generate a valid JSON report.", 500)
 
         final_sources = [ {**source_map[sid], 'id': sid} for sid in sorted(list(valid_ids_set)) if sid in source_map ]

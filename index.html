@@ -329,16 +329,7 @@
                 // 2. 使用 marked.js 将 [ID](#source-ID) 正常渲染为链接
                 const rawHtml = marked.parse(text, { breaks: true });
 
-                // 3. 将 marked.js 生成的锚点链接替换为完整的、带方括号的、指向外部来源的直接链接
-                return rawHtml.replace(/<a href=['"]#source-(\d+)['"]>(\d+)<\/a>/g, (match, sourceId, linkText) => {
-                    const source = sourcesData.find(s => s.id == sourceId);
-                    if (source && source.link) {
-                        // 重新加上方括号，并构建完整的外部链接
-                        return `<a href="${source.link}" class="citation-link" target="_blank" rel="noopener noreferrer">[${linkText}]</a>`;
-                    }
-                    // 如果找不到源，则只显示带方括号的文本，避免死链
-                    return `[${linkText}]`;
-                });
+                return rawHtml;
             };
             
             const selectedAspects = Array.from(aspectTagsContainer.querySelectorAll('input:checked')).map(input => input.value);
