@@ -100,7 +100,9 @@ def perform_google_search(query, api_key, cse_id, num_results=2):
         response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
         search_results = response.json()
-        print(f"✅ Google搜索API响应: 查询='{query}', 结果={json.dumps(search_results, ensure_ascii=False, indent=2)})") # Debug log
+        items_count = len(search_results.get('items', []))
+        first_item_title = search_results.get('items', [{}])[0].get('title', '无标题') if items_count > 0 else '无结果'
+        print(f"✅ Google搜索API响应: 查询='{query}', 结果数={items_count}, 首个结果标题='{first_item_title}'") # Debug log
 
         if 'items' not in search_results:
             print(f"⚠️ Google搜索成功但没有结果: 查询='{query}")
