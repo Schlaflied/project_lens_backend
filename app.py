@@ -176,19 +176,7 @@ def scrub_invalid_citations(data, valid_ids_set):
         return re.sub(r'\[(\d+)\]', lambda m: m.group(0) if int(m.group(1)) in valid_ids_set else "", data)
     return data
 
-def replace_citations_with_links(data):
-    """
-    [最终修复] 此函数将文本中的 [ID] 转换为可点击的 Markdown 锚点链接 `[ID](#source-ID)`。
-    这是实现维基百科式可点击、可跳转引用的行业标准做法。
-    """
-    if isinstance(data, dict):
-        return {k: replace_citations_with_links(v) for k, v in data.items()}
-    if isinstance(data, list):
-        return [replace_citations_with_links(elem) for elem in data]
-    if isinstance(data, str):
-        # 将 [ID] 替换为 Markdown 锚点链接格式
-        return re.sub(r'\[(\d+)\]', r'[\\1](#source-\\1)', data)
-    return data
+
 
 # --- 10. API路由 (已更新) ---
 @app.route('/', methods=['GET'])
@@ -265,7 +253,7 @@ def analyze_company_text():
             valid_ids_set = all_mentioned_ids.intersection(source_map.keys())
             scrubbed_report_data = scrub_invalid_citations(report_data, valid_ids_set)
             # [最终修复] 将有效的 [ID] 标记转换为可点击的 Markdown 锚点链接
-            final_report_data = replace_citations_with_links(scrubbed_report_data)
+            final_report_data = scrubbed_report_data
 
         except json.JSONDecodeError:
             print(f"!!! AI returned malformed JSON: {response.text} !!!") # Log the raw response

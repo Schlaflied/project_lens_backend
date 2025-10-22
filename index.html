@@ -329,7 +329,16 @@
                 // 2. 使用 marked.js 将 [ID](#source-ID) 正常渲染为链接
                 const rawHtml = marked.parse(text, { breaks: true });
 
-                return rawHtml;
+                return rawHtml.replace(/<a href=['\"]#source-(\\d+)['\"]>(\\d+)<\/a>/g, (match, sourceId, linkText) => {
+                    const source = sourcesData.find(s => s.id == sourceId);
+                    if (source && source.link) {
+                        // Create an external link
+                        return `<a href="${source.link}" class="citation-link" target="_blank" rel="noopener noreferrer">[${linkText}]</a>`;
+                    } else {
+                        // If source not found, display as plain text
+                        return `[${linkText}]`;
+                    }
+                });
             };
             
             const selectedAspects = Array.from(aspectTagsContainer.querySelectorAll('input:checked')).map(input => input.value);
