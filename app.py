@@ -225,8 +225,10 @@ def analyze_company_text():
         comprehensive_queries = list(set([ f'"{company_name}"{location_query_part} {aspect}' for aspect in ["company culture review", "work life balance", "salary benefits", "growth opportunities", "hiring process interview", "management style", "overtime culture", "innovation culture", "diversity inclusion", "training programs", "sustainability", "scam fraud"] ] + [f'site:linkedin.com "{company_name}" "{location}"', f'site:indeed.com "{company_name}" "{location}" reviews', f'site:glassdoor.com "{company_name}" "{location}" reviews']))
         
         for query in comprehensive_queries:
-            search_query = f'{query}' # 暂时移除时效性过滤器
+            print(f"🔍 正在处理综合查询: '{query}'") # New debug log
+            search_query = f'{query}'
             snippets, sources_data = perform_google_search(search_query, SEARCH_API_KEY, SEARCH_ENGINE_ID)
+            print(f"✅ 综合查询结果: 查询='{query}', 找到 {len(snippets)} 个片段, {len(sources_data)} 个来源数据") # New debug log
             for i, snippet in enumerate(snippets):
                 if i < len(sources_data):
                     source_info = sources_data[i]
