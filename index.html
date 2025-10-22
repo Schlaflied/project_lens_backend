@@ -356,12 +356,16 @@
 
             resultContainer.innerHTML = DOMPurify.sanitize(reportHeaderHTML + redFlagHTML + hiringExperienceHTML + timelinessHTML + cultureFitHTML + valueMatchHTML + finalRiskHTML, {ADD_TAGS: ['span', 'div', 'ul', 'li', 'strong', 'a', 'br', 'h2', 'h3', 'p', 'em', 'strong', 'b', 'i'], ADD_ATTR: ['style', 'href', 'class', 'target', 'rel']});
             
-            let sourcesHTML = `<h2>${titles.sources}</h2>`;
-            sourcesData.forEach(source => {
-                // 给每个文献条目加上对应的 id，这样锚点链接才能找到它
-                sourcesHTML += `<div class="source-item" id="source-${source.id}">${ICONS[source.source_type] || ICONS.default}<span>[${source.id}]</span><a href="${source.link}" target="_blank" rel="noopener noreferrer">${source.title}</a></div>`;
-            });
-            sourcesContainer.innerHTML = DOMPurify.sanitize(sourcesHTML, {ADD_TAGS: ['div', 'span', 'a', 'svg', 'path'], ADD_ATTR: ['id', 'href', 'target', 'rel', 'class', 'xmlns', 'width', 'height', 'fill', 'viewBox', 'd', 'fill-rule']});
+            if (Array.isArray(sourcesData) && sourcesData.length > 0) {
+                let sourcesHTML = `<h2>${titles.sources}</h2>`;
+                sourcesData.forEach(source => {
+                    // 给每个文献条目加上对应的 id，这样锚点链接才能找到它
+                    sourcesHTML += `<div class="source-item" id="source-${source.id}">${ICONS[source.source_type] || ICONS.default}<span>[${source.id}]</span><a href="${source.link}" target="_blank" rel="noopener noreferrer">${source.title}</a></div>`;
+                });
+                sourcesContainer.innerHTML = DOMPurify.sanitize(sourcesHTML, {ADD_TAGS: ['div', 'span', 'a', 'svg', 'path'], ADD_ATTR: ['id', 'href', 'target', 'rel', 'class', 'xmlns', 'width', 'height', 'fill', 'viewBox', 'd', 'fill-rule']});
+            } else {
+                sourcesContainer.innerHTML = '';
+            }
         }
         
         // --- 7. 核心事件处理 ---

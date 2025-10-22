@@ -166,14 +166,14 @@ PROMPT_TEMPLATE = """As 'Project Lens', an expert AI assistant, generate a detai
 # --- 9. 引用净化与链接注入 (已修复) ---
 def extract_all_mentioned_ids(report_data):
     all_text = json.dumps(report_data)
-    found_ids = re.findall(r'\\[(\\d+)\\]', all_text)
+    found_ids = re.findall(r'\[(\d+)\]', all_text)
     return set(int(id_str) for id_str in found_ids)
 
 def scrub_invalid_citations(data, valid_ids_set):
     if isinstance(data, dict): return {k: scrub_invalid_citations(v, valid_ids_set) for k, v in data.items()}
     if isinstance(data, list): return [scrub_invalid_citations(elem, valid_ids_set) for elem in data]
     if isinstance(data, str):
-        return re.sub(r'\\[(\\d+)\\]', lambda m: m.group(0) if int(m.group(1)) in valid_ids_set else "", data)
+        return re.sub(r'\[(\d+)\]', lambda m: m.group(0) if int(m.group(1)) in valid_ids_set else "", data)
     return data
 
 def replace_citations_with_links(data):
@@ -187,7 +187,7 @@ def replace_citations_with_links(data):
         return [replace_citations_with_links(elem) for elem in data]
     if isinstance(data, str):
         # 将 [ID] 替换为 Markdown 锚点链接格式
-        return re.sub(r'\\[(\\d+)\\]', r'[\\1](#source-\\1)', data)
+        return re.sub(r'\[(\d+)\]', r'[\\1](#source-\\1)', data)
     return data
 
 # --- 10. API路由 (已更新) ---
