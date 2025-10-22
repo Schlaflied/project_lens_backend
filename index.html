@@ -324,21 +324,23 @@
             // [核心修改] 渲染报告文本的处理函数
             const processText = text => {
                 if (!text) return '';
-                // 1. [已修复] 此处不再需要手动清理，直接交给 marked.js 处理
+                // 1. Use marked.js to convert Markdown to HTML.
+                //    This will leave [ID] tags as plain text.
+                let htmlContent = marked.parse(text, { breaks: true });
 
-                // 2. 使用 marked.js 将 [ID](#source-ID) 正常渲染为链接
-                const rawHtml = marked.parse(text, { breaks: true });
-
-                return rawHtml.replace(/<a href=['\"]#source-(\\d+)['\"]>(\\d+)<\/a>/g, (match, sourceId, linkText) => {
-                    const source = sourcesData.find(s => s.id == sourceId);
+                // 2. Find all [ID] patterns in the HTML content and replace them with external links.
+                htmlContent = htmlContent.replace(/\[(\d+)\]/g, (match, sourceId) => {
+                    const source = sourcesData.find(s => s.id == parseInt(sourceId)); // Convert sourceId to integer for comparison
                     if (source && source.link) {
                         // Create an external link
-                        return `<a href="${source.link}" class="citation-link" target="_blank" rel="noopener noreferrer">[${linkText}]</a>`;
+                        return `<a href="${source.link}" class="citation-link" target="_blank" rel="noopener noreferrer">[${sourceId}]</a>`;
                     } else {
                         // If source not found, display as plain text
-                        return `[${linkText}]`;
+                        return `[${sourceId}]`;
                     }
                 });
+
+                return htmlContent;
             };
             
             const selectedAspects = Array.from(aspectTagsContainer.querySelectorAll('input:checked')).map(input => input.value);
