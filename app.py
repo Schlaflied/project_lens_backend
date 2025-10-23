@@ -161,8 +161,11 @@ def scrape_website_for_text(url):
     except Exception as e:
         print(f"❌ 爬取网站时发生错误: {e}"); return None
 
-# --- 8. 核心AI指令 (已优化) ---
-PROMPT_TEMPLATE = """As 'Project Lens', an expert AI assistant, generate a detailed analysis report in {output_language} as a JSON object.
+# --- 8. 多语言Prompt指令核心 ---
+PROMPTS = {
+    'zh-CN': {
+        'rag_prompt': """你是一个专业的职业分析师。请基于以下编号的上下文信息，回答用户的问题。规则：1. 你的回答必须完全基于提供的上下文信息。2. 在你提供信息的每一句话或关键事实之后，必须使用方括号 [编号] 来注明信息来源。3. 如果信息来自多个来源，请使用 [1], [2] 这样的格式。4. 保持分析的专业性和客观性。[上下文信息] {context_text} [用户问题] {user_query} [你的专业分析] """,
+        'fallback_prompt': """As 'Project Lens', an expert AI assistant, generate a detailed analysis report in Simplified Chinese (简体中文) as a JSON object.
 **Citation Rules (VERY IMPORTANT):**
 1. Cite information by embedding the corresponding source tag (e.g., `[1]`, `[2]`).
 2. **NEVER include URLs directly in the report text.** Use only the source ID tags for citation.
@@ -194,6 +197,78 @@ PROMPT_TEMPLATE = """As 'Project Lens', an expert AI assistant, generate a detai
   "cited_ids": []
 }}
 ```"""
+    },
+    'en': {
+        'rag_prompt': """You are a professional career analyst. Please answer the user's question based on the numbered context information below. Rules: 1. Your answer must be based entirely on the context provided. 2. After every sentence or key fact you provide, you MUST cite the source using brackets [Number]. 3. If information comes from multiple sources, use the format [1], [2]. 4. Maintain a professional and objective tone in your analysis. [Context] {context_text} [User Question] {user_query} [Your Professional Analysis] """,
+        'fallback_prompt': """As 'Project Lens', an expert AI assistant, generate a detailed analysis report in English as a JSON object.
+**Citation Rules (VERY IMPORTANT):**
+1. Cite information by embedding the corresponding source tag (e.g., `[1]`, `[2]`).
+2. **NEVER include URLs directly in the report text.** Use only the source ID tags for citation.
+3. **You MUST ONLY use the source IDs provided in the `Research Data` section. DO NOT invent, hallucinate, or create any source IDs that are not explicitly given to you.**
+4. When multiple sources support a single point, cite them individually, like `[21], [22], [29], [30]`.
+5. Include all genuinely used IDs in the final `cited_ids` array.
+**Information Provided:**
+1. **Company, Role & Location:** {company_name} - {job_title} in {location}
+2. **Current Date:** {current_date}
+3. **Applicant's Resume/Bio:**
+   ```{resume_text}```
+4. **Research Data (Each block has a `[Source ID: X]`):**
+   ```{context_with_sources}```
+**Your Task:** Synthesize all info into a single JSON object with the following structure:
+```json
+{{
+  "report": {{
+    "company_location": "{location}",
+    "red_flag_status": "Your assessment (e.g., 'Low Risk').",
+    "red_flag_text": "Detailed explanation for red flags. Cite sources like [1] or [2], [3].",
+    "hiring_experience_text": "Analysis of hiring process. Cite sources.",
+    "timeliness_analysis": "1. Analyze info recency. 2. Analyze job posting status (e.g., 'Likely open', 'Potentially expired') and give a reason. Cite sources.",
+    "culture_fit": {{ "reputation": "", "management": "", "sustainability": "", "wlb": "", "growth": "", "salary": "", "overtime": "", "innovation": "", "benefits": "", "diversity": "", "training": "" }},
+    "value_match_score": "A number from 0-100. 0 if no resume.",
+    "value_match_text": "Explanation of the match score. Cite sources.",
+    "final_risk_rating": "Your final risk rating.",
+    "final_risk_text": "Summary justifying the final rating. Cite sources."
+  }},
+  "cited_ids": []
+}}
+```"""
+    },
+    'zh-TW': {
+        'rag_prompt': """你是一個專業的職業分析師。請基於以下編號的上下文資訊，回答用戶的問題。規則：1. 你的回答必須完全基於提供的上下文資訊。2. 在你提供資訊的每一句話或關鍵事實之後，必須使用方括號 [編號] 來註明資訊來源。3. 如果資訊來自多個來源，請使用 [1], [2] 這樣的格式。4. 保持分析的專業性和客觀性。[上下文資訊] {context_text} [用戶問題] {user_query} [你的專業分析] """,
+        'fallback_prompt': """As 'Project Lens', an expert AI assistant, generate a detailed analysis report in Traditional Chinese (繁體中文) as a JSON object.
+**Citation Rules (VERY IMPORTANT):**
+1. Cite information by embedding the corresponding source tag (e.g., `[1]`, `[2]`).
+2. **NEVER include URLs directly in the report text.** Use only the source ID tags for citation.
+3. **You MUST ONLY use the source IDs provided in the `Research Data` section. DO NOT invent, hallucinate, or create any source IDs that are not explicitly given to you.**
+4. When multiple sources support a single point, cite them individually, like `[21], [22], [29], [30]`.
+5. Include all genuinely used IDs in the final `cited_ids` array.
+**Information Provided:**
+1. **Company, Role & Location:** {company_name} - {job_title} in {location}
+2. **Current Date:** {current_date}
+3. **Applicant's Resume/Bio:**
+   ```{resume_text}```
+4. **Research Data (Each block has a `[Source ID: X]`):**
+   ```{context_with_sources}```
+**Your Task:** Synthesize all info into a single JSON object with the following structure:
+```json
+{{
+  "report": {{
+    "company_location": "{location}",
+    "red_flag_status": "Your assessment (e.g., 'Low Risk').",
+    "red_flag_text": "Detailed explanation for red flags. Cite sources like [1] or [2], [3].",
+    "hiring_experience_text": "Analysis of hiring process. Cite sources.",
+    "timeliness_analysis": "1. Analyze info recency. 2. Analyze job posting status (e.g., 'Likely open', 'Potentially expired') and give a reason. Cite sources.",
+    "culture_fit": {{ "reputation": "", "management": "", "sustainability": "", "wlb": "", "growth": "", "salary": "", "overtime": "", "innovation": "", "benefits": "", "diversity": "", "training": "" }},
+    "value_match_score": "A number from 0-100. 0 if no resume.",
+    "value_match_text": "Explanation of the match score. Cite sources.",
+    "final_risk_rating": "Your final risk rating.",
+    "final_risk_text": "Summary justifying the final rating. Cite sources."
+  }},
+  "cited_ids": []
+}}
+```"""
+    }
+}
 
 # --- 9. 引用净化与链接注入 (已修复) ---
 def extract_all_mentioned_ids(report_data):
@@ -232,6 +307,10 @@ def analyze_company_text():
         user_query = data.get('companyName')
         if not user_query: return make_error_response("missing_parameter", "Company name is required.", 400)
 
+        lang = data.get('lang', 'zh-CN')
+        if lang not in ['en', 'zh-CN', 'zh-TW']:
+            lang = 'zh-CN'
+
         # RAG Step 1: Query VectorDB
         if PINECONE_INDEX:
             try:
@@ -249,48 +328,49 @@ def analyze_company_text():
 
                 if relevant_matches:
                     print(f"✅ Found {len(relevant_matches)} relevant documents in Pinecone.")
-                    context_text = "\n\n".join([match['metadata']['snippet'] for match in relevant_matches])
                     
-                    # RAG Step 2: Generate Answer from Context
-                    model = genai.GenerativeModel('models/gemini-2.5-pro')
-                    prompt = f'''Based on the following context, please provide a detailed answer to the user's query.
-
-User Query: "{user_query}"
-
-Context from internal knowledge base:
----
-{context_text}
----
-
-Your Answer:
-'''
-                    response = model.generate_content(prompt)
-                    
-                    # RAG Step 3: Format Response
-                    answer = response.text
-                    sources = []
-                    for match in relevant_matches:
+                    context_chunks = []
+                    sources_for_frontend = []
+                    for i, match in enumerate(relevant_matches, 1):
                         metadata = match['metadata']
+                        snippet = metadata.get('snippet', '')
+                        context_chunks.append(f"[{i}] {snippet}")
+                        
+                        # Prepare sources for frontend
                         label = "Unknown Source"
                         if metadata.get('source_type') == 'web_scrape':
                             try:
-                                # Extract domain for a cleaner label
                                 domain = metadata['source_url'].split('/')[2]
                                 date = metadata['scraped_at'].split('T')[0]
                                 label = f"{domain} ({date})"
                             except:
                                 label = "Web Scrape"
+                        else:
+                            label = metadata.get('label', f"Source {i}")
+
                         
-                        sources.append({
-                            'source_type': metadata.get('source_type'),
-                            'source_url': metadata.get('source_url'),
-                            'label': label,
-                            'snippet': metadata.get('snippet')
+                        sources_for_frontend.append({
+                            'id': i,
+                            'title': label,
+                            'link': metadata.get('source_url', '#'),
+                            'source_type': metadata.get('source_type', 'default'),
+                            'snippet': snippet
                         })
+                    
+                    context_text = "\n\n".join(context_chunks)
+
+                    # RAG Step 2: Generate Answer from Context
+                    model = genai.GenerativeModel('models/gemini-2.5-pro')
+                    rag_prompt = PROMPTS[lang]['rag_prompt'].format(context_text=context_text, user_query=user_query)
+                    response = model.generate_content(rag_prompt)
+                    
+                    # RAG Step 3: Format Response
+                    answer = response.text
 
                     return jsonify({
                         "answer": answer,
-                        "sources": sources
+                        "sources": sources_for_frontend,
+                        "company_name": user_query
                     })
 
             except Exception as e:
@@ -338,9 +418,7 @@ Your Answer:
 
         if not context_blocks: return make_error_response("no_info_found", "No information found for this company. This might be due to the company being very new, very small, or the search query being too specific. Please try a broader search term.", 404)
 
-        lang_code = data.get('language', 'en')
-        language_instructions = {'en': 'English', 'zh-CN': 'Simplified Chinese (简体中文)', 'zh-TW': 'Traditional Chinese (繁體中文)'}
-        full_prompt = PROMPT_TEMPLATE.format(output_language=language_instructions.get(lang_code, 'English'), company_name=company_name, job_title=job_title, location=location or "Not Specified", current_date=datetime.date.today().strftime("%Y-%m-%d"), resume_text=data.get('resumeText', 'No resume provided.'), context_with_sources="\n\n".join(context_blocks))
+        full_prompt = PROMPTS[lang]['fallback_prompt'].format(company_name=company_name, job_title=job_title, location=location or "Not Specified", current_date=datetime.date.today().strftime("%Y-%m-%d"), resume_text=data.get('resumeText', 'No resume provided.'), context_with_sources="\n\n".join(context_blocks))
         
         try:
             model = genai.GenerativeModel('models/gemini-2.5-pro')
@@ -369,7 +447,7 @@ Your Answer:
             return make_error_response("ai_malformed_json", "AI failed to generate a valid JSON report.", 500)
 
         final_sources = [ {**source_map[sid], 'id': sid} for sid in sorted(list(valid_ids_set)) if sid in source_map ]
-        return jsonify({"company_name": company_name, "report": final_report_data, "sources": final_sources, "rag_source": "web_scrape"})
+        return jsonify({"company_name": company_name, "answer": final_report_data, "sources": final_sources})
 
     except Exception as e:
         print(f"!!! 发生未知错误(被主路由捕获): {e} !!!"); print(traceback.format_exc())
