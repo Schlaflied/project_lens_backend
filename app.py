@@ -38,14 +38,14 @@ cache = Cache(app, config={
 
 limiter = Limiter(get_remote_address, app=app, default_limits=["5 per day"], storage_uri="memory://")
 
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone
 
 # --- 2. API密钥配置 ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SEARCH_API_KEY = os.getenv("SEARCH_API_KEY")
 SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_HOST = os.getenv("PINECONE_HOST")
+PINECONE_HOST = os.getenv("PINECONE_")
 
 API_KEYS_CONFIGURED = all([GEMINI_API_KEY, SEARCH_API_KEY, SEARCH_ENGINE_ID, PINECONE_API_KEY, PINECONE_HOST])
 PINECONE_INDEX = None
@@ -59,9 +59,8 @@ print("--- 环境变量诊断结束 ---")
 try:
     if API_KEYS_CONFIGURED:
         genai.configure(api_key=GEMINI_API_KEY)
-        pinecone_client = Pinecone(api_key=PINECONE_API_KEY, host=PINECONE_HOST)
-        index_name = 'project-lens-data'
-        PINECONE_INDEX = pinecone_client.Index(index_name)
+        pinecone_client = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_HOST)
+        PINECONE_INDEX = pinecone_client.Index('project-lens-data')
         print("✅ API密钥与Pinecone配置成功！服务已准备就绪。")
     else:
         print("⚠️ 警告：一个或多个API密钥或Pinecone环境变量未设置。服务将以受限模式运行，/analyze 端点将不可用。")
