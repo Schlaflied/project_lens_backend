@@ -322,30 +322,40 @@
             const defs = t.definitions;
 
             // [核心修改] 渲染报告文本的处理函数
-            const processText = text => {
+            function processText(text) {
                 if (!text) return '';
-                // 1. Use marked.js to convert Markdown to HTML.
-                //    This will leave [ID] tags as plain text.
-                let htmlContent = marked.parse(text, { breaks: true });
+                let processedText = text;
 
-                // 2. Find all [ID] patterns in the HTML content and replace them with external links.
-                htmlContent = htmlContent.replace(/\[(\d+)\]/g, (match, sourceId) => {
-                    const source = sourcesData.find(s => s.id == parseInt(sourceId)); // Convert sourceId to integer for comparison
-                    if (source && source.link) {
-                        // Create an external link
-                        return `<a href="${source.link}" class="citation-link" target="_blank" rel="noopener noreferrer">[${sourceId}]</a>`;
-                    } else {
-                        // If source not found, display as plain text
-                        return `[${sourceId}]`;
-                    }
+                // First, handle the more specific [ID: 123] format from fallback scrapes
+                processedText = processedText.replace(/\[ID: (\d+)\]/g, (match, id) => {
+                    const source = sourcesData.find(s => s.id == id);
+                    const title = source ? ` title="${source.title || ''}"` : '';
+                    return `<a href="#source-${id}" class="citation-link" ${title}>[${id}]</a>`;
                 });
 
-                return htmlContent;
-            };
+                // Then, handle the general [1] format from RAG, using a negative lookbehind
+                processedText = processedText.replace(/(?<!ID: )\[(\d+)\]/g, (match, id) => {
+                    const source = sourcesData.find(s => s.id == id);
+                    const title = source ? ` title="${source.title || ''}"` : '';
+                    return `<a href="#source-${id}" class="citation-link" ${title}>[${id}]</a>`;
+                });
+
+                // Finally, parse the entire text for Markdown
+                if (window.marked) {
+                    processedText = window.marked.parse(processedText, { breaks: true, gfm: true });
+                } else {
+                    // Fallback for if marked.js isn't loaded
+                    processedText = processedText.replace(/\n/g, '<br>');
+                }
+                return processedText;
+            }
             
             const selectedAspects = Array.from(aspectTagsContainer.querySelectorAll('input:checked')).map(input => input.value);
             
             const reportHeaderHTML = `<div class="report-header"><div class="company-name">${companyNameData}</div><div class="company-location">${fullReportData.company_location || ''}</div></div>`;
+
+            // Handle RAG summary response
+            const summaryHTML = fullReportData.analysis_summary ? `<h2>${t.report_titles.final_risk || 'Analysis Summary'}</h2><div>${processText(fullReportData.analysis_summary)}</div>` : '';
 
             const redFlagHTML = fullReportData.red_flag_text ? `<div class="report-section success"><h2>${titles.red_flag}</h2><div class="status">${processText(fullReportData.red_flag_status)}</div>${processText(fullReportData.red_flag_text)}</div>` : '';
             const hiringExperienceHTML = fullReportData.hiring_experience_text ? `<div class="report-section warning"><h2>${titles.hiring_experience}</h2>${processText(fullReportData.hiring_experience_text)}</div>` : '';
@@ -365,7 +375,7 @@
             const valueMatchHTML = fullReportData.value_match_score > 0 ? `<h2>${titles.value_match}</h2><div class="progress-bar-container"><div class="progress-bar" style="width: ${fullReportData.value_match_score}%;">${fullReportData.value_match_score}%</div></div>${processText(fullReportData.value_match_text)}` : '';
             const finalRiskHTML = fullReportData.final_risk_rating ? `<h2>${titles.final_risk}</h2><p><strong>${aspects.rating}: ${fullReportData.final_risk_rating}</strong></p>${processText(fullReportData.final_risk_text)}` : '';
 
-            resultContainer.innerHTML = DOMPurify.sanitize(reportHeaderHTML + redFlagHTML + hiringExperienceHTML + timelinessHTML + cultureFitHTML + valueMatchHTML + finalRiskHTML, {ADD_TAGS: ['span', 'div', 'ul', 'li', 'strong', 'a', 'br', 'h2', 'h3', 'p', 'em', 'strong', 'b', 'i'], ADD_ATTR: ['style', 'href', 'class', 'target', 'rel']});
+            resultContainer.innerHTML = DOMPurify.sanitize(reportHeaderHTML + summaryHTML + redFlagHTML + hiringExperienceHTML + timelinessHTML + cultureFitHTML + valueMatchHTML + finalRiskHTML, {ADD_TAGS: ['span', 'div', 'ul', 'li', 'strong', 'a', 'br', 'h2', 'h3', 'p', 'em', 'strong', 'b', 'i'], ADD_ATTR: ['style', 'href', 'class', 'target', 'rel']});
             
             if (Array.isArray(sourcesData) && sourcesData.length > 0) {
                 let sourcesHTML = `<h2>${titles.sources}</h2>`;
@@ -401,7 +411,7 @@
             }, 2500);
 
             try {
-                const response = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyName: smartPasteBox.value, resumeText: resumeTextInput.value, language: currentLang }) });
+                const response = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyName: smartPasteBox.value, resumeText: resumeTextInput.value, lang: currentLang }) });
                 
                 const responseText = await response.text(); 
                 clearInterval(loadingInterval);
@@ -414,9 +424,39 @@
                 }
 
                 if (response.ok) {
-                    fullReportData = result.report;
-                    companyNameData = result.company_name;
-                    sourcesData = result.sources;
+                    // Reset global variables
+                    fullReportData = {};
+                    sourcesData = [];
+                    companyNameData = result.company_name || smartPasteBox.value.split('\n')[0];
+
+                    if (result.answer && typeof result.answer === 'string' && result.sources) {
+                        // --- New RAG Response ---
+                        console.log("Rendering RAG response");
+                        // For RAG, the answer is a single text block. We'll place it in a summary field.
+                        fullReportData = {
+                            analysis_summary: result.answer, // Contains [1], [2] citations
+                            company_location: '',
+                            red_flag_text: '',
+                            hiring_experience_text: '',
+                            timeliness_analysis: '',
+                            culture_fit: {},
+                            value_match_score: 0,
+                            value_match_text: '',
+                            final_risk_rating: '',
+                            final_risk_text: ''
+                        };
+                        // RAG sources already have a 1-based 'id'
+                        sourcesData = result.sources.map(s => ({ ...s, link: s.link || '#' }));
+                    } else if (result.answer && typeof result.answer === 'object' && result.sources) {
+                        // --- Fallback Scrape Response (now with 'answer' key) ---
+                        console.log("Rendering Scrape Fallback response");
+                        fullReportData = result.answer; // The 'answer' key now holds the report object
+                        sourcesData = result.sources.map(s => ({ ...s, link: s.link || '#' }));
+                    } else {
+                        console.error("Unknown response format:", result);
+                        throw new Error(translations[currentLang].generic_error);
+                    }
+                    
                     renderReport();
                 } else {
                     let errorMessage = t.generic_error; // Default to a generic error message.
