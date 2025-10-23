@@ -50,6 +50,12 @@ PINECONE_HOST = os.getenv("PINECONE_HOST")
 API_KEYS_CONFIGURED = all([GEMINI_API_KEY, SEARCH_API_KEY, SEARCH_ENGINE_ID, PINECONE_API_KEY, PINECONE_HOST])
 PINECONE_INDEX = None
 
+# --- 诊断代码：打印出环境变量，看看它们在服务器上到底是什么 ---
+print("--- 环境变量诊断开始 ---")
+print(f"Cloud Run 正在使用的 PINECONE_HOST 是: '{os.getenv('PINECONE_HOST')}'")
+print(f"Cloud Run 正在使用的 PINECONE_API_KEY 的前5位是: '{str(os.getenv('PINECONE_API_KEY'))[:5]}...'")
+print("--- 环境变量诊断结束 ---")
+
 try:
     if API_KEYS_CONFIGURED:
         genai.configure(api_key=GEMINI_API_KEY)
