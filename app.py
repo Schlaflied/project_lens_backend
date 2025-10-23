@@ -45,15 +45,15 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SEARCH_API_KEY = os.getenv("SEARCH_API_KEY")
 SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
+PINECONE_HOST = os.getenv("PINECONE_HOST")
 
-API_KEYS_CONFIGURED = all([GEMINI_API_KEY, SEARCH_API_KEY, SEARCH_ENGINE_ID, PINECONE_API_KEY, PINECONE_ENVIRONMENT])
+API_KEYS_CONFIGURED = all([GEMINI_API_KEY, SEARCH_API_KEY, SEARCH_ENGINE_ID, PINECONE_API_KEY, PINECONE_HOST])
 PINECONE_INDEX = None
 
 try:
     if API_KEYS_CONFIGURED:
         genai.configure(api_key=GEMINI_API_KEY)
-        pinecone_client = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
+        pinecone_client = Pinecone(api_key=PINECONE_API_KEY, host=PINECONE_HOST)
         PINECONE_INDEX = pinecone_client.Index('project-lens-data')
         print("✅ API密钥与Pinecone配置成功！服务已准备就绪。")
     else:
