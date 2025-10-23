@@ -20,6 +20,7 @@ from flask_cors import CORS
 from bs4 import BeautifulSoup
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_caching import Cache
 import traceback
 import datetime
 # ✨ 核心：导入Google API核心异常
@@ -28,6 +29,13 @@ from google.api_core import exceptions as google_exceptions
 # --- 1. 初始化和配置 ---
 app = Flask(__name__)
 CORS(app)
+
+# 缓存配置
+cache = Cache(app, config={
+    'CACHE_TYPE': 'SimpleCache',
+    'CACHE_DEFAULT_TIMEOUT': 43200  # 12 hours in seconds
+})
+
 limiter = Limiter(get_remote_address, app=app, default_limits=["5 per day"], storage_uri="memory://")
 
 # --- 2. API密钥配置 ---
@@ -187,6 +195,7 @@ def health_check():
 
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 @limiter.limit("5 per day")
+@cache.cached(key_prefix=lambda: request.get_data())
 def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
     if not API_KEYS_CONFIGURED: return make_error_response("configuration_error", "一个或多个必需的API密钥未在服务器上配置。", 503)
