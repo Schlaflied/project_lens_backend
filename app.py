@@ -38,21 +38,29 @@ cache = Cache(app, config={
 
 limiter = Limiter(get_remote_address, app=app, default_limits=["5 per day"], storage_uri="memory://")
 
+import pinecone
+
 # --- 2. API密钥配置 ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SEARCH_API_KEY = os.getenv("SEARCH_API_KEY")
 SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
-API_KEYS_CONFIGURED = all([GEMINI_API_KEY, SEARCH_API_KEY, SEARCH_ENGINE_ID])
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
+
+API_KEYS_CONFIGURED = all([GEMINI_API_KEY, SEARCH_API_KEY, SEARCH_ENGINE_ID, PINECONE_API_KEY, PINECONE_ENVIRONMENT])
+PINECONE_INDEX = None
 
 try:
     if API_KEYS_CONFIGURED:
         genai.configure(api_key=GEMINI_API_KEY)
-        print("✅ API密钥配置成功！服务已准备就绪。")
+        pinecone.init(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
+        PINECONE_INDEX = pinecone.Index('project-lens-data')
+        print("✅ API密钥与Pinecone配置成功！服务已准备就绪。")
     else:
-        print("⚠️ 警告：一个或多个API密钥环境变量未设置。服务将以受限模式运行，/analyze 端点将不可用。")
+        print("⚠️ 警告：一个或多个API密钥或Pinecone环境变量未设置。服务将以受限模式运行，/analyze 端点将不可用。")
 except Exception as e:
     API_KEYS_CONFIGURED = False
-    print(f"❌ API密钥配置失败: {e}")
+    print(f"❌ API密钥或Pinecone配置失败: {e}")
 
 # --- 3. 错误响应辅助函数 ---
 def make_error_response(error_type, message, status_code):
@@ -125,15 +133,31 @@ def perform_google_search(query, api_key, cse_id, num_results=2):
         print(f"❌ Google搜索时发生未知错误: 查询='{query}', 错误={e}")
         return [], []
 
-# --- 7. 网页爬虫 ---
+# --- 7. 网页爬虫与向量化 ---
 def scrape_website_for_text(url):
     try:
         headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
         response = requests.get(url, headers=headers, timeout=10); response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         [s.decompose() for s in soup(['script', 'style'])]
-        text = '\n'.join(chunk for chunk in (phrase.strip() for line in (line.strip() for line in soup.get_text().splitlines()) for phrase in line.split("  ")) if chunk)
-        return text[:5000]
+        cleaned_text = '\n'.join(chunk for chunk in (phrase.strip() for line in (line.strip() for line in soup.get_text().splitlines()) for phrase in line.split("  ")) if chunk)
+        
+        if cleaned_text and PINECONE_INDEX:
+            try:
+                print(f"📦 开始为 {url} 生成向量并存入Pinecone...")
+                vector = genai.embed_content(model='models/text-embedding-004', content=cleaned_text, task_type='RETRIEVAL_DOCUMENT')
+                metadata = {
+                    'source_type': 'web_scrape',
+                    'source_url': url,
+                    'snippet': cleaned_text[:500],
+                    'scraped_at': datetime.datetime.now().isoformat()
+                }
+                PINECONE_INDEX.upsert(vectors=[{'id': url, 'values': vector['embedding'], 'metadata': metadata}])
+                print(f"✅ 成功将 {url} 的向量存入Pinecone。")
+            except Exception as e:
+                print(f"❌ 存入Pinecone时发生错误 (URL: {url}): {e}")
+
+        return cleaned_text[:5000]
     except Exception as e:
         print(f"❌ 爬取网站时发生错误: {e}"); return None
 
