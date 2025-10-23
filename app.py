@@ -268,7 +268,25 @@ Your Answer:
                     
                     # RAG Step 3: Format Response
                     answer = response.text
-                    sources = [match['metadata'] for match in relevant_matches]
+                    sources = []
+                    for match in relevant_matches:
+                        metadata = match['metadata']
+                        label = "Unknown Source"
+                        if metadata.get('source_type') == 'web_scrape':
+                            try:
+                                # Extract domain for a cleaner label
+                                domain = metadata['source_url'].split('/')[2]
+                                date = metadata['scraped_at'].split('T')[0]
+                                label = f"{domain} ({date})"
+                            except:
+                                label = "Web Scrape"
+                        
+                        sources.append({
+                            'source_type': metadata.get('source_type'),
+                            'source_url': metadata.get('source_url'),
+                            'label': label,
+                            'snippet': metadata.get('snippet')
+                        })
 
                     return jsonify({
                         "answer": answer,
