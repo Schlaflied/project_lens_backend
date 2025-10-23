@@ -79,8 +79,8 @@ def get_rate_limit_message(request):
     lang_code = 'en'
     try:
         data = request.get_json(silent=True)
-        if data and 'language' in data:
-            lang_code = data.get('language')
+        if data and 'lang' in data:
+            lang_code = data.get('lang')
     except Exception:
         pass
     return messages.get(lang_code, messages['en'])
