@@ -55,13 +55,6 @@ try:
         genai.configure(api_key=GEMINI_API_KEY)
         pinecone_client = Pinecone(api_key=PINECONE_API_KEY, host=PINECONE_HOST)
         index_name = 'project-lens-data'
-        
-        # Check if index exists, and create if it doesn't
-        if index_name not in pinecone_client.list_indexes().names():
-            # Assuming a default dimension of 768 for 'text-embedding-004' and 'cosine' metric
-            pinecone_client.create_index(name=index_name, dimension=768, metric='cosine', spec=ServerlessSpec(cloud='aws', region='us-west-2'))
-            print(f"✅ Pinecone index '{index_name}' created.")
-        
         PINECONE_INDEX = pinecone_client.Index(index_name)
         print("✅ API密钥与Pinecone配置成功！服务已准备就绪。")
     else:
