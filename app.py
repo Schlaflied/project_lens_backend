@@ -266,27 +266,13 @@ Your Answer:
 '''
                     response = model.generate_content(prompt)
                     
-                    # Extract sources from metadata
-                    final_sources = []
-                    for i, match in enumerate(relevant_matches):
-                        metadata = match['metadata']
-                        final_sources.append({
-                            'id': i + 1,
-                            'title': f"Source from: {metadata.get('source_url', 'Internal Document')}",
-                            'link': metadata.get('source_url', '#'),
-                            'snippet': metadata.get('snippet', '')
-                        })
+                    # RAG Step 3: Format Response
+                    answer = response.text
+                    sources = [match['metadata'] for match in relevant_matches]
 
-                    # Simple JSON structure for RAG response
-                    rag_report = {
-                        "analysis_text": response.text,
-                    }
-                    
                     return jsonify({
-                        "company_name": user_query, 
-                        "report": rag_report, 
-                        "sources": final_sources,
-                        "rag_source": "pinecone"
+                        "answer": answer,
+                        "sources": sources
                     })
 
             except Exception as e:
