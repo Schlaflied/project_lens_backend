@@ -224,16 +224,80 @@ def analyze_company_text():
     if request.method == 'OPTIONS': return jsonify({'status': 'ok'}), 200
     if not API_KEYS_CONFIGURED: return make_error_response("configuration_error", "一个或多个必需的API密钥未在服务器上配置。", 503)
 
-    print("--- v35.0 Clickable Citation analysis request received! ---")
+    print("--- RAG analysis request received! ---")
     try:
         data = request.get_json()
         if not data: return make_error_response("invalid_json", "Request body is not valid JSON.", 400)
 
-        smart_paste_content = data.get('companyName')
-        if not smart_paste_content: return make_error_response("missing_parameter", "Company name is required.", 400)
+        user_query = data.get('companyName')
+        if not user_query: return make_error_response("missing_parameter", "Company name is required.", 400)
+
+        # RAG Step 1: Query VectorDB
+        if PINECONE_INDEX:
+            try:
+                print(f"🔍 Performing RAG search in Pinecone for: '{user_query}'")
+                query_vector = genai.embed_content(model='models/text-embedding-004', content=user_query, task_type='RETRIEVAL_QUERY')['embedding']
+                
+                query_results = PINECONE_INDEX.query(
+                    vector=query_vector,
+                    top_k=5,
+                    include_metadata=True
+                )
+                
+                # Check if results are good enough (e.g., score > 0.5)
+                relevant_matches = [match for match in query_results['matches'] if match['score'] > 0.5]
+
+                if relevant_matches:
+                    print(f"✅ Found {len(relevant_matches)} relevant documents in Pinecone.")
+                    context_text = "\n\n".join([match['metadata']['snippet'] for match in relevant_matches])
+                    
+                    # RAG Step 2: Generate Answer from Context
+                    model = genai.GenerativeModel('models/gemini-2.5-pro')
+                    prompt = f'''Based on the following context, please provide a detailed answer to the user's query.
+
+User Query: "{user_query}"
+
+Context from internal knowledge base:
+---
+{context_text}
+---
+
+Your Answer:
+'''
+                    response = model.generate_content(prompt)
+                    
+                    # Extract sources from metadata
+                    final_sources = []
+                    for i, match in enumerate(relevant_matches):
+                        metadata = match['metadata']
+                        final_sources.append({
+                            'id': i + 1,
+                            'title': f"Source from: {metadata.get('source_url', 'Internal Document')}",
+                            'link': metadata.get('source_url', '#'),
+                            'snippet': metadata.get('snippet', '')
+                        })
+
+                    # Simple JSON structure for RAG response
+                    rag_report = {
+                        "analysis_text": response.text,
+                    }
+                    
+                    return jsonify({
+                        "company_name": user_query, 
+                        "report": rag_report, 
+                        "sources": final_sources,
+                        "rag_source": "pinecone"
+                    })
+
+            except Exception as e:
+                print(f"❌ RAG search failed: {e}")
+                # Proceed to fallback logic
+        
+        print("⚠️ Pinecone RAG did not yield sufficient results. Falling back to web scraping.")
+        # Fallback logic (original implementation)
         
         try:
-            company_name, job_title, location = extract_entities_with_ai(smart_paste_content)
+            company_name, job_title, location = extract_entities_with_ai(user_query)
         except Exception as e:
             print(f"!!! 实体提取AI调用失败: {e} !!!"); print(traceback.format_exc())
             error_message = f"AI entity extraction failed. Error: {type(e).__name__}. This might be a problem with the Generative Language API permissions or billing. Please ensure the model 'models/gemini-2.5-pro' is available for your project."
@@ -245,6 +309,7 @@ def analyze_company_text():
         location_query_part = f' "{location}"' if location else ""
         comprehensive_queries = list(set([ f'"{company_name}"{location_query_part} {aspect}' for aspect in ["company culture review", "work life balance", "salary benefits", "growth opportunities", "hiring process interview", "management style", "overtime culture", "innovation culture", "diversity inclusion", "training programs", "sustainability", "scam fraud"] ] + [f'site:linkedin.com "{company_name}" "{location}"', f'site:indeed.com "{company_name}" "{location}" reviews', f'site:glassdoor.com "{company_name}" "{location}" reviews']))
         
+        scraped_urls = set()
         for query in comprehensive_queries:
             print(f"🔍 正在处理综合查询: '{query}'") # New debug log
             search_query = f'{query}'
@@ -253,11 +318,18 @@ def analyze_company_text():
             for i, snippet in enumerate(snippets):
                 if i < len(sources_data):
                     source_info = sources_data[i]
-                    link = source_info.get('link', '').lower()
-                    source_info['source_type'] = 'linkedin' if 'linkedin.com' in link else 'glassdoor' if 'glassdoor.com' in link else 'indeed' if 'indeed.com' in link else 'default'
-                    context_blocks.append(f"[Source ID: {source_id_counter}] {snippet}")
-                    source_map[source_id_counter] = source_info
-                    source_id_counter += 1
+                    link = source_info.get('link')
+                    if link and link not in scraped_urls:
+                        scraped_text = scrape_website_for_text(link)
+                        if scraped_text:
+                            context_blocks.append(f"[Source ID: {source_id_counter}] {scraped_text}")
+                            source_map[source_id_counter] = {
+                                'title': source_info.get('title'),
+                                'link': link,
+                                'snippet': snippet
+                            }
+                            source_id_counter += 1
+                            scraped_urls.add(link)
             time.sleep(0.1)
 
         if not context_blocks: return make_error_response("no_info_found", "No information found for this company. This might be due to the company being very new, very small, or the search query being too specific. Please try a broader search term.", 404)
@@ -293,7 +365,7 @@ def analyze_company_text():
             return make_error_response("ai_malformed_json", "AI failed to generate a valid JSON report.", 500)
 
         final_sources = [ {**source_map[sid], 'id': sid} for sid in sorted(list(valid_ids_set)) if sid in source_map ]
-        return jsonify({"company_name": company_name, "report": final_report_data, "sources": final_sources})
+        return jsonify({"company_name": company_name, "report": final_report_data, "sources": final_sources, "rag_source": "web_scrape"})
 
     except Exception as e:
         print(f"!!! 发生未知错误(被主路由捕获): {e} !!!"); print(traceback.format_exc())
