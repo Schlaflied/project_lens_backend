@@ -38,7 +38,7 @@ cache = Cache(app, config={
 
 limiter = Limiter(get_remote_address, app=app, default_limits=["5 per day"], storage_uri="memory://")
 
-from pinecone import Pinecone, Index
+from pinecone import Pinecone
 
 # --- 2. API密钥配置 ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
