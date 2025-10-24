@@ -47,7 +47,7 @@ SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_HOST = os.getenv("PINECONE_")
 
-API_KEYS_CONFIGURED = all([GEMINI_API_KEY, SEARCH_API_KEY, SEARCH_ENGINE_ID, PINECONE_API_KEY, PINECONE_HOST])
+API_KEYS_CONFIGURED = True
 PINECONE_INDEX = None
 
 # --- 诊断代码：打印出环境变量，看看它们在服务器上到底是什么 ---
@@ -57,10 +57,27 @@ print(f"Cloud Run 正在使用的 PINECONE_API_KEY 的前5位是: '{str(os.geten
 print("--- 环境变量诊断结束 ---")
 
 try:
+    if not GEMINI_API_KEY:
+        print("⚠️ 警告：GEMINI_API_KEY 未设置。")
+        API_KEYS_CONFIGURED = False
+    if not SEARCH_API_KEY:
+        print("⚠️ 警告：SEARCH_API_KEY 未设置。")
+        API_KEYS_CONFIGURED = False
+    if not SEARCH_ENGINE_ID:
+        print("⚠️ 警告：SEARCH_ENGINE_ID 未设置。")
+        API_KEYS_CONFIGURED = False
+    if not PINECONE_API_KEY:
+        print("⚠️ 警告：PINECONE_API_KEY 未设置。")
+        API_KEYS_CONFIGURED = False
+    if not PINECONE_HOST:
+        print("⚠️ 警告：PINECONE_HOST 未设置。")
+        API_KEYS_CONFIGURED = False
+
     if API_KEYS_CONFIGURED:
         genai.configure(api_key=GEMINI_API_KEY)
-        pinecone_client = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_HOST)
-        PINECONE_INDEX = pinecone_client.Index('project-lens-data')
+        pinecone_client = Pinecone(api_key=PINECONE_API_KEY, host=PINECONE_HOST)
+        index_name = 'project-lens-data'
+        PINECONE_INDEX = pinecone_client.Index(index_name)
         print("✅ API密钥与Pinecone配置成功！服务已准备就绪。")
     else:
         print("⚠️ 警告：一个或多个API密钥或Pinecone环境变量未设置。服务将以受限模式运行，/analyze 端点将不可用。")
