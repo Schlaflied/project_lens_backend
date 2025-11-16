@@ -38,10 +38,15 @@ This is an AI-powered career analysis backend service built with the Python Flas
   "lang": "zh-CN"
 }
 
-变量名 / Variable Name,描述 / Description
-GEMINI_API_KEY,Google Gemini API 密钥。/ Google Gemini API Key.
-SEARCH_API_KEY,Google Custom Search API 密钥。/ Google Custom Search API Key.
-SEARCH_ENGINE_ID,Google Custom Search Engine ID。/ Google Custom Search Engine ID.
-PINECONE_API_KEY,Pinecone 向量数据库 API 密钥。/ Pinecone Vector Database API Key.
-PINECONE_ENVIRONMENT,Pinecone 环境名称。/ Pinecone Environment Name.
-PORT,"服务监听端口（如 8080），通常由 PaaS 平台（如 Cloud Run）自动注入。/ The service listening port (e.g., 8080), usually injected automatically by PaaS platforms (like Cloud Run)."
+## 部署配置 / Deployment Configuration
+
+项目需要以下环境变量才能正常运行。/ The project requires the following environment variables to run correctly.
+
+| 变量名 / Variable Name | 描述 / Description |
+| :--- | :--- |
+| `GEMINI_API_KEY` | Google Gemini API 密钥。/ Google Gemini API Key. |
+| `SEARCH_API_KEY` | Google Custom Search API 密钥。/ Google Custom Search API Key. |
+| `SEARCH_ENGINE_ID` | Google Custom Search Engine ID。/ Google Custom Search Engine ID. |
+| `PINECONE_API_KEY` | Pinecone 向量数据库 API 密钥。/ Pinecone Vector Database API Key. |
+| `PINECONE_ENVIRONMENT` | Pinecone 环境名称。/ Pinecone Environment Name. |
+| `PORT` | 服务监听端口（如 `8080`），通常由 PaaS 平台（如 Cloud Run）自动注入。/ The service listening port (e.g., `8080`), usually injected automatically by PaaS platforms (like Cloud Run). |
