@@ -29,21 +29,6 @@ This is an AI-powered career analysis backend service built with the Python Flas
 | `GET` | `/` | Health Check. 检查服务状态和 API 密钥配置。 / Checks service health and API key configuration. |
 | `POST` | `/analyze` | **核心分析接口**。接受 JSON 数据，返回详细的公司分析报告。 / **Core Analysis Endpoint**. Accepts JSON data and returns a detailed company analysis report. |
 
-### `POST /analyze` 请求体示例 / Request Body Example
-
-```json
-{
-  "companyName": "Tesla Software Engineer, Fremont CA",
-  "resumeText": "Passionate developer with 5 years experience in machine learning and a focus on work-life balance.",
-  "lang": "zh-CN"
-}
-
-
-
-
-
-
-
 ## 部署配置 / Deployment Configuration
 
 项目需要以下环境变量才能正常运行。/ The project requires the following environment variables to run correctly.
@@ -56,3 +41,13 @@ This is an AI-powered career analysis backend service built with the Python Flas
 | `PINECONE_API_KEY` | Pinecone 向量数据库 API 密钥。/ Pinecone Vector Database API Key. |
 | `PINECONE_ENVIRONMENT` | Pinecone 环境名称。/ Pinecone Environment Name. |
 | `PORT` | 服务监听端口（如 `8080`），通常由 PaaS 平台（如 Cloud Run）自动注入。/ The service listening port (e.g., `8080`), usually injected automatically by PaaS platforms (like Cloud Run). |
+
+### `POST /analyze` 请求体示例 / Request Body Example
+
+```json
+{
+  "companyName": "Tesla Software Engineer, Fremont CA",
+  "resumeText": "Passionate developer with 5 years experience in machine learning and a focus on work-life balance.",
+  "lang": "zh-CN"
+}
+
