@@ -38,6 +38,12 @@ This is an AI-powered career analysis backend service built with the Python Flas
   "lang": "zh-CN"
 }
 
+
+
+
+
+
+
 ## 部署配置 / Deployment Configuration
 
 项目需要以下环境变量才能正常运行。/ The project requires the following environment variables to run correctly.
