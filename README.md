@@ -6,11 +6,11 @@ This is an AI-powered career analysis backend service built with the Python Flas
 
 ## 核心功能 / Core Features
 
-* **AI 深度分析 / AI Deep Analysis:** 使用 **Google Gemini 2.5 Pro** 模型进行专业的公司风险评估和文化契合度分析。
-* **RAG 增强搜索 / RAG Enhanced Search:** 结合 **Pinecone** 向量数据库和 **Google Custom Search API**，获取最新的、具有可点击引用的多源信息。
-* **智能实体提取 / Smart Entity Extraction:** 自动从用户输入中提取公司名、职位和地点。
-* **速率限制与缓存 / Rate Limiting & Caching:** 采用 Flask-Limiter 和 Flask-Caching 来控制接口调用频率（默认 5 次/天）和优化性能。
-* **多语言支持 / Multilingual Support:** 支持简体中文 (zh-CN)、繁体中文 (zh-TW) 和英文 (en)。
+* **AI 深度分析 / AI Deep Analysis:** 使用 **Google Gemini 2.5 Pro** 模型进行专业的公司风险评估和文化契合度分析。/ Utilizes the **Google Gemini 2.5 Pro** model for professional company risk assessment and culture fit analysis.
+* **RAG 增强搜索 / RAG Enhanced Search:** 结合 **Pinecone** 向量数据库和 **Google Custom Search API**，获取最新的、具有可点击引用的多源信息。/ Combines the **Pinecone** vector database and **Google Custom Search API** to fetch up-to-date, multi-source information with clickable citations.
+* **智能实体提取 / Smart Entity Extraction:** 自动从用户输入中提取公司名、职位和地点。/ Automatically extracts company name, job title, and location from user input.
+* **速率限制与缓存 / Rate Limiting & Caching:** 采用 Flask-Limiter 和 Flask-Caching 来控制接口调用频率（默认 5 次/天）和优化性能。/ Uses Flask-Limiter and Flask-Caching to control API call frequency (default 5 times/day) and optimize performance.
+* **多语言支持 / Multilingual Support:** 支持简体中文 (zh-CN)、繁体中文 (zh-TW) 和英文 (en)。/ Supports Simplified Chinese (zh-CN), Traditional Chinese (zh-TW), and English (en).
 
 ## 技术栈 / Tech Stack
 
